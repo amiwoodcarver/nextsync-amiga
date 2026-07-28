@@ -32,6 +32,19 @@
 
 #define CONFFILE "PROGDIR:NextSync.conf"
 
+/*
+ * What the AmigaDOS Version command reads out of the file. Kept in step
+ * with aminet/NextSync.readme, which tools/mkdist.sh checks.
+ *
+ * Deliberately no date. The usual "(dd.mm.yyyy)" cannot be represented by
+ * Version on 3.1: a two digit year puts this release in 1926, before the
+ * Amiga epoch, so it gives up and prints dashes, and a four digit one is
+ * misparsed into a different date entirely. A release date that is simply
+ * wrong is worse than none, and the readme and the guide both carry it.
+ */
+static const char version_tag[] __attribute__((used)) =
+    "$VER: NextSync 1.1";
+
 unsigned long __stack = 100000;    /* OpenSSL needs room */
 
 int nextsync_gui(nsconf *conf, const char *conffile);           /* gui.c */

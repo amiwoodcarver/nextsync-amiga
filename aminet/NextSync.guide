@@ -1,0 +1,460 @@
+@database NextSync.guide
+@$VER: NextSync.guide 1.1 (28.7.2026)
+@author "Axel Hubinette"
+@(c) "2026 Axel Hubinette"
+@wordwrap
+
+@node Main "NextSync 1.1"
+
+               @{b}NextSync 1.1@{ub}
+
+     Nextcloud folder synchronisation for AmigaOS 3.1 and later
+
+
+  @{" Introduction    " link Intro}   what it is, and what it does
+  @{" Requirements    " link Require} what you need before you start
+  @{" Installation    " link Install} where to put it
+  @{" Setting it up   " link Prefs}   the Preferences window
+  @{" The window      " link Window}  the main window
+  @{" From the Shell  " link Shell}   arguments and return codes
+  @{" Configuration   " link Config}  the file, if you prefer to edit it
+  @{" How it decides  " link Rules}   what gets copied, and which way
+  @{" Limits          " link Limits}  what it does not do
+  @{" Trouble         " link Trouble} when something goes wrong
+  @{" History         " link History} what changed
+  @{" Author          " link Author}  and where the source lives
+
+@endnode
+
+
+@node Intro "Introduction"
+
+@{b}Introduction@{ub}
+
+NextSync keeps folders on your Amiga in step with folders on a Nextcloud
+server. It talks WebDAV over HTTPS with real certificate checking, so it
+works with any ordinary Nextcloud installation, and it needs nothing on
+the server side.
+
+It is a two way sync. Something you change on the Amiga goes up, something
+that changed on the server comes down, and it works out which is which by
+remembering what both sides looked like after the last run. Folders are
+followed all the way down, not just their top level.
+
+It is one binary of about 49K with a Workbench interface and a Shell
+interface in it, and it uses only what is already in your Kickstart ROM to
+draw itself, so there is no GUI toolkit to install.
+
+Written for the A1200 and A4000, tested on a 68020 without an FPU and on a
+68040.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Require "Requirements"
+
+@{b}Requirements@{ub}
+
+  @{b}AmigaOS 3.1 or later@{ub}
+      3.1 is the floor. Newer is fine.
+
+  @{b}A 68020 or better@{ub}
+      Not NextSync's doing: AmiSSL v5 is built for 68020 and up.
+
+  @{b}About 6 MB of free RAM@{ub}
+      Most of it is OpenSSL. Check with Avail before you wonder why a
+      sync failed.
+
+  @{b}A TCP/IP stack@{ub}
+      Roadshow, AmiTCP, Miami, or anything else that provides
+      bsdsocket.library. NextSync does not care which.
+
+  @{b}AmiSSL 5.x@{ub}
+      From Aminet, util/libs/AmiSSL-v5-OS3.lha. Run its own installer;
+      it needs an AmiSSL: assign, which the installer sets up.
+
+  @{b}mathieeedoubbas.library and mathieeedoubtrans.library in LIBS:@{ub}
+      Both ship with every Workbench install, so you almost certainly
+      have them. AmiSSL's startup calls into them without checking, so
+      if they are missing it does not report an error, it simply stops.
+      Worth knowing if you are running a hand built boot disk.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Install "Installation"
+
+@{b}Installation@{ub}
+
+1.  Install AmiSSL 5.x first, using its own installer.
+
+2.  Copy the NextSync drawer wherever you keep your programs. There is
+    nothing to configure by hand and nothing is written outside the
+    drawer.
+
+3.  Start NextSync. With no configuration it opens @{" Preferences " link Prefs}
+    straight away.
+
+The configuration is written to NextSync.conf in the same drawer as the
+program, which is PROGDIR: as far as the program is concerned. Move the
+drawer and the settings move with it.
+
+To sync automatically at boot, put a line in S:User-Startup:
+
+    @{b}NextSync SYNC >NIL:@{ub}
+
+Note that this waits for the sync to finish before the rest of the
+startup continues.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Prefs "Setting it up"
+
+@{b}Setting it up@{ub}
+
+Preferences is under the Project menu, and opens on its own the first
+time you run NextSync.
+
+  @{b}Server@{ub}
+      The host name of your Nextcloud, without https:// and without a
+      path. For example cloud.example.com
+
+  @{b}User@{ub}
+      Your Nextcloud user name.
+
+  @{b}Password@{ub}
+      See below. The field shows asterisks; the character you have just
+      typed stays legible until you type the next one, and is covered as
+      soon as you leave the field.
+
+  @{b}Port@{ub}
+      443 for HTTPS, which is what you want. Anything else is treated as
+      plain HTTP, which is only useful on a network you trust
+      completely.
+
+  @{b}Connect@{ub}
+      Opens the connection with what you have typed. If it cannot, it
+      says why and nothing is saved. If it can, the box below fills with
+      the folders in your account.
+
+  @{b}Folders@{ub}
+      Click a folder to tick it. Ticked folders are the ones that get
+      synced. Only the folders at the top level of your account are
+      listed -- that is what you choose between; syncing then follows
+      each one all the way down.
+
+  @{b}Store in@{ub}
+      The drawer the synced folders are kept in. Browse opens a file
+      requester, or type a path. It is created if it does not exist. A
+      folder called Documents ends up in <drawer>/Documents.
+
+  @{b}Save@{ub}
+      Writes NextSync.conf. Cancel leaves everything as it was.
+
+@{b}About the password@{ub}
+
+It is stored in plain text. There is no way around that: AmigaOS has
+nowhere to keep a secret, and the password has to be presented to the
+server on every single request, so it cannot be hashed either.
+
+So use a Nextcloud @{b}app password@{ub} rather than your account password.
+On the server, go to Settings, Security, and create one. It gets your
+files and nothing else, you can revoke it on its own, and it will not
+help anybody log in as you.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Window "The window"
+
+@{b}The window@{ub}
+
+  @{b}Server@{ub}    the server and user currently configured
+
+  @{b}Folders@{ub}   what will be synced, and where each one goes
+
+  @{b}Status@{ub}    what is happening right now: the file being
+            transferred and how far through the run it is
+
+  @{b}Log@{ub}       one line per thing done, plus anything that went wrong
+
+  @{b}Sync now@{ub}  start. While a sync runs the button reads @{b}Stop sync@{ub};
+            pressing it, ESC, or the close gadget stops after the file
+            being transferred finishes. Everything already transferred
+            is kept, and the next run picks up from there.
+
+  @{b}Quit@{ub}      leave. It will not quit in the middle of a sync; stop
+            the sync first.
+
+The menu holds About, Preferences, Snapshot -- which saves a picture of
+the screen to out/ and is only there because it was useful while
+building this -- and Quit.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Shell "From the Shell"
+
+@{b}From the Shell@{ub}
+
+  @{b}NextSync@{ub}
+      Opens the window.
+
+  @{b}NextSync SYNC@{ub}
+      Syncs everything and exits, printing what it does. This is the one
+      for scripts and for S:User-Startup. CTRL-C stops it after the file
+      being transferred finishes.
+
+  @{b}NextSync LIST [dir]@{ub}
+      Lists a directory on the server. With no argument, the top level.
+      Useful for checking that a server and password work at all.
+
+  @{b}NextSync PREFS@{ub}
+      Opens Preferences on its own and exits when it closes.
+
+Any of them can be followed by SNAPSHOT, which saves a picture of the
+screen into out/ once the window has drawn itself and then exits.
+
+@{b}Return codes@{ub}
+
+   0   everything worked
+   5   finished, but something failed or the run was stopped early
+  10   could not connect, or the sync could not start
+  20   no usable configuration
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Config "Configuration"
+
+@{b}Configuration@{ub}
+
+Preferences writes this for you, but it is a plain text file and you can
+edit it if you would rather. It lives next to the program.
+
+    # NextSync configuration
+    server  cloud.example.com
+    port    443
+    user    yourname
+    pass    your-app-password
+
+    local   DH0:Nextcloud
+    folder  Documents
+    folder  Photos
+
+  @{b}server@{ub}   host name only, no https:// and no path
+  @{b}port@{ub}     443 means TLS; anything else is plain HTTP
+  @{b}user@{ub}     your Nextcloud user name
+  @{b}pass@{ub}     the password, which may contain spaces
+  @{b}local@{ub}    the drawer the synced folders are kept in
+  @{b}folder@{ub}   one line per folder to sync, up to 16
+
+Lines starting with # or ; are ignored.
+
+@{b}Pairs@{ub}
+
+NextSync 1.0 had no local drawer and named both sides explicitly:
+
+    pair    /Photos    Work:Cloud/Pictures
+
+Those still work. They are synced as before, shown in Preferences, and
+written back out untouched when you save -- so an old configuration keeps
+working, and a folder that has to live somewhere unusual can still be
+pinned by hand.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Rules "How it decides"
+
+@{b}How it decides what to do@{ub}
+
+For every file, NextSync compares three things: what is on the server,
+what is on disk, and what it recorded after the last successful sync. The
+record is a file called .nextsync.state inside each synced drawer.
+
+  server              local        last run   what happens
+  ------------------  -----------  ---------  --------------------------
+  there, etag changed unchanged    known      download
+  unchanged           changed      known      upload
+  there               gone         known      delete on the server
+  gone                there        known      delete locally
+  there               missing      unknown    download, it is new
+  missing             there        unknown    upload, it is new
+  changed             changed      known      conflict, see below
+
+@{b}Conflicts@{ub}
+
+If a file changed on both sides, NextSync does not choose. The local copy
+is renamed to <name>.conflict and the server copy is downloaded, so you
+have both and can sort it out yourself.
+
+@{b}Deleting@{ub}
+
+A deletion is only carried across for a file that the record shows was
+synced before. So the first time you point NextSync at a drawer that
+already has things in it, nothing is deleted anywhere -- everything that
+exists on only one side is treated as new and copied to the other.
+
+Delete .nextsync.state to make it forget and start over. Nothing is lost
+by doing that; it just re-examines everything.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Limits "Limits"
+
+@{b}Limits@{ub}
+
+  @{b}Names with a colon in them@{ub}
+      Cannot exist on an Amiga filesystem, and are skipped with a line
+      in the log. Length is left to the filesystem: FFS stops at 30
+      characters, PFS3 and SFS allow about 100. A name that is too long
+      shows up as one file that failed, not a failed sync.
+
+  @{b}Non-ASCII names@{ub}
+      Pass through as bytes. They look wrong in Workbench but they go
+      back to the server unchanged, so nothing is lost.
+
+  @{b}Times are UTC@{ub}
+      On both sides. Set the Amiga clock to UTC, or accept a constant
+      offset; the record settles after the first run either way.
+
+  @{b}One thing at a time@{ub}
+      One connection, one transfer. This is a 68020.
+
+  @{b}Very large uploads@{ub}
+      Nextcloud's chunked upload is not implemented, so a big upload
+      depends on the server's request timeout.
+
+  @{b}Files changed without changing@{ub}
+      A file edited in place whose size and timestamp both stay the same
+      is not noticed. Catching that means hashing every file on every
+      run, which on this hardware costs more than it is worth.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Trouble "Trouble"
+
+@{b}When something goes wrong@{ub}
+
+  @{b}Nothing happens at all, or the machine locks up on startup@{ub}
+      Almost always the mathieee libraries. AmiSSL's startup opens
+      mathieeedoubbas.library and mathieeedoubtrans.library and calls
+      into them without checking whether they opened, so if they are
+      missing from LIBS: it does not report anything, it simply stops.
+      Both ship with Workbench.
+
+  @{b}"connection failed"@{ub}
+      The TCP/IP stack is not running, the name does not resolve, or
+      nothing is listening. Try NextSync LIST from a Shell, which prints
+      the reason. Check the server name has no https:// in front of it.
+
+  @{b}Certificate errors@{ub}
+      AmiSSL checks properly, which is the point. Make sure AmiSSL's
+      certificate store is installed -- its installer does this -- and
+      that the Amiga's clock is roughly right, since a certificate that
+      is not valid yet fails just as hard as an expired one.
+
+  @{b}"short transfer" or "connection lost mid-transfer"@{ub}
+      The download did not arrive whole and was thrown away rather than
+      kept. Nothing is broken; run it again.
+
+  @{b}Out of memory@{ub}
+      OpenSSL needs about 6 MB. Avail will tell you what you have.
+
+  @{b}A file keeps failing@{ub}
+      Look at its name. A colon cannot be stored, and FFS will not take
+      a name over 30 characters.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node History "History"
+
+@{b}History@{ub}
+
+@{b}1.1@{ub}
+
+  Preferences window: the server, the folders and the local drawer are
+  all set up from the GUI. Connect tests the server and lists the
+  folders on your account to choose from, and Browse picks the local
+  drawer. It opens by itself on a first run.
+
+  The password field no longer shows the password.
+
+  A sync can be stopped while it runs, with the button, ESC, the close
+  gadget, or CTRL-C from the Shell.
+
+  Deleting a folder tree now clears the whole thing in one run, deepest
+  drawer first, instead of leaving the empty drawers behind.
+
+  A download that stops early is checked against the length the server
+  declared, and a part file left behind by a crash is discarded rather
+  than being mistaken for something of yours and uploaded.
+
+@{b}1.0@{ub}
+
+  First release. Two way sync, conflict handling, TLS through AmiSSL,
+  Workbench and Shell interfaces.
+
+@{" Contents " link Main}
+
+@endnode
+
+
+@node Author "Author"
+
+@{b}Author@{ub}
+
+Axel Hubinette
+axel.hubinette@@gmail.com
+
+@{b}Source@{ub}
+
+    https://github.com/axelsharper/nextsync-amiga
+
+C, built with m68k-amigaos-gcc. The repository has the whole build
+environment, the emulator test rig, and a file of notes on the AmigaOS
+specifics that cost real time on the way -- what AmiSSL needs before it
+will start, the amiga.lib sprintf that quietly shadows the real one, and
+how you build a password gadget out of a string edit hook when GadTools
+has no such thing.
+
+Bug reports and patches are welcome.
+
+@{b}Thanks@{ub}
+
+To Jens Maus and everyone who works on AmiSSL. None of this would be
+possible on a 68k Amiga in 2026 without it.
+
+@{b}Licence@{ub}
+
+Free to use and to pass on. No warranty of any kind: it moves your files
+around, so keep backups of anything you cannot lose.
+
+@{" Contents " link Main}
+
+@endnode

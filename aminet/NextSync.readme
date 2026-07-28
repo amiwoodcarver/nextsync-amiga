@@ -1,0 +1,139 @@
+Short:        Two-way Nextcloud folder sync
+Author:       Axel Hubinette <axel.hubinette@gmail.com>
+Uploader:     Axel Hubinette <axel.hubinette@gmail.com>
+Type:         comm/tcp
+Version:      1.1
+Architecture: m68k-amigaos >= 3.1.0
+Requires:     AmiSSL v5 (util/libs/AmiSSL-v5-OS3.lha), TCP/IP stack, 68020
+
+
+NextSync keeps folders on your Amiga in step with folders on a Nextcloud
+server, over HTTPS with real certificate checking. It is about 49K, has a
+Workbench interface and a CLI in the same binary, and needs nothing beyond
+AmiSSL and a TCP/IP stack -- the interface uses gadtools.library, which has
+been in ROM since Kickstart 2.0, so there is no GUI toolkit to install.
+
+Written for the A1200 and A4000. Tested on a 68020 without an FPU and on a
+68040.
+
+
+WHAT IT DOES
+
+  Two way sync. Changes on either side are carried to the other: new
+  files, changed files, new drawers, deletions. Folders are followed all
+  the way down, not just their top level.
+
+  Sensible change detection. The server's etag and the local size and
+  modification time are recorded after every transfer, so a second run
+  transfers nothing, and a run after you edit one file transfers exactly
+  that file. This survives a reboot.
+
+  Conflicts never lose data. If a file changed on both sides, the local
+  copy is renamed to <name>.conflict and the server copy is downloaded,
+  so both survive and you can decide.
+
+  Deletions are safe on first contact. A deletion is only carried across
+  for a file that is on record as having been synced before, so pointing
+  NextSync at a drawer that already has things in it will not empty it.
+
+  Streaming transfers. 16K blocks, so a file never has to fit in RAM.
+  Downloads are written to <name>.nspart and only renamed into place when
+  complete and the length matches what the server said, so an interrupted
+  transfer cannot leave a file that looks finished.
+
+  TLS 1.3 through AmiSSL v5, checked against the AmiSSL certificate store.
+
+  Local file dates are preserved on the server (X-OC-MTime).
+
+
+SETTING IT UP
+
+  Start it with no configuration and the Preferences window opens by
+  itself; afterwards it is under Project. Fill in the server, your user
+  name and your password, and press Connect. NextSync opens the
+  connection there and then and tells you if it cannot, and on success
+  the box below fills with the folders in your account. Click the ones
+  you want synced, Browse for the drawer to keep them in, and Save.
+
+  The password is not shown while you type it, but it is stored in plain
+  text in NextSync.conf: AmigaOS has nowhere to keep a secret, and the
+  password has to be presented to the server on every request. Use a
+  Nextcloud app password (Settings, Security on the server) rather than
+  your account password -- it can be revoked on its own, without touching
+  the rest of your account.
+
+
+USING IT
+
+  NextSync            open the window
+  NextSync SYNC       sync everything and exit, for scripts and startups
+  NextSync LIST [dir] list a directory on the server
+  NextSync PREFS      open Preferences on its own
+
+  A sync in progress can be stopped: the Sync now button reads Stop sync
+  while one is running, as do ESC and the close gadget, and CTRL-C does
+  it from the CLI. It stops after the file being transferred finishes, so
+  nothing is left half written, and the next run carries on from there.
+
+
+REQUIREMENTS
+
+  AmigaOS 3.1 or newer, 68020 or better    AmiSSL v5 needs a 68020
+  About 6 MB of free RAM                   OpenSSL 3.x is not small
+  A TCP/IP stack                           Roadshow, AmiTCP, Miami --
+                                           anything with bsdsocket.library
+  AmiSSL 5.x                               util/libs/AmiSSL-v5-OS3.lha
+  mathieeedoubbas.library and              both ship with Workbench;
+  mathieeedoubtrans.library in LIBS:       AmiSSL will not start without
+                                           them
+
+
+KNOWN LIMITS
+
+  File names with a ':' in them cannot exist on an Amiga filesystem and
+  are skipped with a line in the log. Length limits are left to the
+  filesystem: FFS stops at 30 characters, PFS3 and SFS allow about 100.
+
+  UTF-8 names pass through as bytes. Names with non-ASCII characters look
+  wrong in Workbench but go back to the server unchanged.
+
+  Times are treated as UTC on both sides. Set the Amiga clock to UTC or
+  live with a constant offset; either way the first sync settles it.
+
+  One connection and one transfer at a time. This is a 68020.
+
+  Nextcloud's chunked upload is not implemented, so a very large upload
+  depends on the server's request timeout.
+
+  A file edited in place without its size or timestamp changing is not
+  noticed. Catching that means hashing every file on every run, which
+  costs more than it is worth on this hardware.
+
+
+INSTALLING
+
+  Install AmiSSL 5.x with its own installer first, then copy the NextSync
+  drawer wherever you like. There is nothing else to set up: the
+  configuration file is written next to the program by the Preferences
+  window.
+
+  Full documentation is in NextSync.guide.
+
+
+SOURCE
+
+  https://github.com/axelsharper/nextsync-amiga
+
+  Written in C for m68k-amigaos-gcc. The repository has the build
+  environment, the emulator test rig and notes on the AmigaOS specifics
+  that cost real time along the way -- AmiSSL's startup requirements, the
+  amiga.lib sprintf trap, and how a password gadget is done with a string
+  edit hook.
+
+  Bug reports and patches are welcome.
+
+
+THANKS
+
+  To Jens Maus and everyone behind AmiSSL, without which none of this
+  would be possible on a 68k Amiga in 2026.

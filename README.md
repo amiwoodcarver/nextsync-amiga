@@ -274,6 +274,26 @@ how logs and results come back. Screen snapshots are taken by the Amiga
 itself and converted to PNG by `tools/ags2png.py`, so no host screen capture
 is involved.
 
+## Packaging for Aminet
+
+```bash
+tools/mkdist.sh
+```
+
+Builds, stages the drawer with its Workbench icons, and checks the things
+Aminet would otherwise bounce it for: the readme's mandatory fields, its
+78 column limit and 40 character `Short:`, file names within 30
+characters, every link in the AmigaGuide resolving, and the `$VER:` string
+in the binary agreeing with the version in the readme.
+
+The result is in `dist/`: `stage/` is exactly what goes in the archive, and
+`NextSync.readme` is uploaded *beside* it rather than inside. Aminet takes
+LhA or zip; `mkdist.sh` writes the zip, and prints the LhA command for a
+machine that has a real LhA (Homebrew's `lha` is Lhasa, which only
+extracts).
+
+The readme and the manual are hand written in `aminet/`.
+
 ## Source layout
 
 | | |

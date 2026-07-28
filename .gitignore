@@ -33,3 +33,6 @@ NextSync.conf
 *.uaem
 *.nspart
 .nextsync.state
+
+# Aminet distribution, built by tools/mkdist.sh
+/dist
