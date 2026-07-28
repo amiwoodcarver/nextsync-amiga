@@ -516,7 +516,7 @@ static BOOL send_request_head(nshttp *h, const char *method, const char *path,
     o = sprintf(head,
                 "%s %s HTTP/1.1\r\n"
                 "Host: %s\r\n"
-                "User-Agent: NextSync/1.0 (AmigaOS 3; 68k)\r\n",
+                "User-Agent: NextSync/1.1 (AmigaOS 3; 68k)\r\n",
                 method, path, h->host);
     if (h->auth[0])
         o += sprintf(head + o, "Authorization: %s\r\n", h->auth);

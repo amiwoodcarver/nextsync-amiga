@@ -57,7 +57,7 @@ struct AGWidget
 
     STRPTR *ag_Labels;      /* AG_CYCLE: NULL terminated choices       */
     LONG    ag_Min;         /* AG_SLIDER                               */
-    LONG    ag_Max;         /* AG_SLIDER                               */
+    LONG    ag_Max;         /* AG_SLIDER; AG_LISTVIEW: visible rows    */
     LONG    ag_Value;       /* initial value / checked / active        */
     STRPTR  ag_Text;        /* AG_TEXT initial contents                */
     ULONG   ag_MaxChars;    /* AG_STRING buffer size (default 128)     */
@@ -112,6 +112,14 @@ struct AGSpec
 /* api                                                                 */
 /* ------------------------------------------------------------------ */
 
+/*
+ * A modal dialog is just a second application opened from inside the first
+ * one's handler: AGUI_Open() a window with its own widget table, AGUI_Run()
+ * it, AGUI_Close() it, and the outer window's loop picks up where it left
+ * off. The outer window stays on screen but does not respond while the
+ * inner loop runs, which is what "modal" means here. Each window needs its
+ * own widget table -- the framework keeps per widget state in it.
+ */
 struct AGUIApp *AGUI_Open(struct AGSpec *spec);
 void            AGUI_Run(struct AGUIApp *app);
 void            AGUI_Close(struct AGUIApp *app);
@@ -140,6 +148,14 @@ void            AGUI_Message(struct AGUIApp *app, CONST_STRPTR title,
                              CONST_STRPTR body);
 BOOL            AGUI_Ask(struct AGUIApp *app, CONST_STRPTR title,
                          CONST_STRPTR body);
+
+/*
+ * ASL drawer requester. path is both the drawer it starts in and, on TRUE,
+ * where the chosen drawer is written back. Returns FALSE if the user
+ * cancelled or asl.library is unavailable, leaving path untouched.
+ */
+BOOL            AGUI_RequestDir(struct AGUIApp *app, CONST_STRPTR title,
+                                char *path, LONG len);
 
 /* diagnostics: appends a line to a file, works when started from Workbench */
 void            AGUI_LogTo(CONST_STRPTR filename);

@@ -17,6 +17,7 @@
 #include "nsdav.h"
 #include "nssync.h"
 #include "nsconf.h"
+#include "nsprefs.h"
 
 #define ID_SERVER   1
 #define ID_PAIRS    2
@@ -27,19 +28,21 @@
 
 #define MENU_ABOUT  101
 #define MENU_SNAP   102
-#define MENU_QUIT   103
+#define MENU_PREFS  103
+#define MENU_QUIT   104
 
 struct gui_state
 {
-    nsconf  *conf;
-    BOOL     busy;
-    int      guitest;      /* 0 off, 1 sync pending, 2 snapshot pending */
+    nsconf     *conf;
+    const char *conffile;
+    BOOL        busy;
+    int         guitest;   /* 0 off, 1 sync pending, 2 snapshot pending */
 };
 
 static struct AGWidget widgets[] =
 {
     { AG_TEXT,     ID_SERVER, "Server:",  0, NULL, 0, 0, 0, "-" },
-    { AG_LISTVIEW, ID_PAIRS,  "Folders:", AGF_NOWEIGHT },
+    { AG_LISTVIEW, ID_PAIRS,  "Folders:", 0,            NULL, 0, 4 },
     { AG_TEXT,     ID_STATUS, "Status:",  0, NULL, 0, 0, 0, "idle" },
     { AG_LISTVIEW, ID_LOG,    "Log:",     AGF_GROW },
     { AG_BUTTON,   ID_SYNC,   "Sync now", 0 },
@@ -49,12 +52,13 @@ static struct AGWidget widgets[] =
 
 static struct NewMenu menu[] =
 {
-    { NM_TITLE, "Project",    NULL, 0, 0, NULL },
-    { NM_ITEM,  "About...",   "?",  0, 0, (APTR)MENU_ABOUT },
-    { NM_ITEM,  "Snapshot",   "S",  0, 0, (APTR)MENU_SNAP },
-    { NM_ITEM,  NM_BARLABEL,  NULL, 0, 0, NULL },
-    { NM_ITEM,  "Quit",       "Q",  0, 0, (APTR)MENU_QUIT },
-    { NM_END,   NULL,         NULL, 0, 0, NULL }
+    { NM_TITLE, "Project",       NULL, 0, 0, NULL },
+    { NM_ITEM,  "About...",      "?",  0, 0, (APTR)MENU_ABOUT },
+    { NM_ITEM,  "Preferences...","P",  0, 0, (APTR)MENU_PREFS },
+    { NM_ITEM,  "Snapshot",      "S",  0, 0, (APTR)MENU_SNAP },
+    { NM_ITEM,  NM_BARLABEL,     NULL, 0, 0, NULL },
+    { NM_ITEM,  "Quit",          "Q",  0, 0, (APTR)MENU_QUIT },
+    { NM_END,   NULL,            NULL, 0, 0, NULL }
 };
 
 /* sync callbacks push into the log list */
@@ -78,6 +82,40 @@ static BOOL gui_file(void *user, const char *action, const char *path,
     AGUI_SetTextF(app, ID_STATUS, "%s %s (%lu/%lu)",
                   action, path, (unsigned long)idx, (unsigned long)total);
     return TRUE;
+}
+
+/* redraw everything that comes out of the configuration */
+static void refresh_config(struct AGUIApp *app)
+{
+    struct gui_state *st = (struct gui_state *)AGUI_UserData(app);
+    nsconf *c = st->conf;
+    static char server[192];         /* the text gadget keeps the pointer */
+    static char row[NSCONF_MAXPAIRS][160];
+    static STRPTR rowp[NSCONF_MAXPAIRS + 1];
+    UWORD i, n = 0;
+
+    if (c->server[0])
+        sprintf(server, "%s:%ld (%s)", c->server, (long)c->port, c->user);
+    else
+        strcpy(server, "not set up yet -- see Project/Preferences");
+    AGUI_SetText(app, ID_SERVER, (CONST_STRPTR)server);
+
+    /* SetList rather than AddItem: this list is read from the top, it is
+     * not a log that should follow its newest line */
+    for (i = 0; i < c->npairs && n < NSCONF_MAXPAIRS; i++, n++)
+    {
+        sprintf(row[n], "%s -> %s", c->pair[i].remote, c->pair[i].local);
+        rowp[n] = (STRPTR)row[n];
+    }
+    if (!n)
+    {
+        strcpy(row[0], "no folders selected");
+        rowp[n++] = (STRPTR)row[0];
+    }
+    rowp[n] = NULL;
+    AGUI_SetList(app, ID_PAIRS, rowp);
+
+    AGUI_Disable(app, ID_SYNC, (BOOL)!nsconf_complete(c));
 }
 
 static void run_sync(struct AGUIApp *app)
@@ -140,29 +178,31 @@ static void handler(struct AGUIApp *app, struct AGEvent *ev)
     switch (ev->ev_Type)
     {
     case AGE_OPEN:
-        {
-            char buf[192];
-            UWORD i;
-
-            sprintf(buf, "%s:%ld (%s)", st->conf->server,
-                    (long)st->conf->port, st->conf->user);
-            AGUI_SetText(app, ID_SERVER, buf);
-            for (i = 0; i < st->conf->npairs; i++)
-            {
-                sprintf(buf, "%s -> %s", st->conf->pair[i].remote,
-                        st->conf->pair[i].local);
-                AGUI_AddItem(app, ID_PAIRS, (CONST_STRPTR)buf);
-            }
+        refresh_config(app);
+        if (nsconf_complete(st->conf))
             gui_log(app, "ready.");
-        }
+        else
+            gui_log(app, "not configured: open Project/Preferences.");
         break;
 
     case AGE_TICK:
-        /* GUITEST mode: one automated sync, one snapshot, then quit */
+        /* GUITEST: one automated sync, one snapshot, then quit */
         if (st->guitest == 1)
         {
             st->guitest = 2;
             run_sync(app);
+        }
+        /* NESTTEST: open Preferences from inside this window's own event
+         * loop, which is the case the modal dialog has to survive */
+        else if (st->guitest == 3)
+        {
+            BOOL saved = nsprefs_show_ex(app, st->conf, st->conffile, 1);
+
+            printf("nest: preferences returned %s\n", saved ? "saved" : "cancelled");
+            fflush(stdout);
+            refresh_config(app);
+            gui_log(app, "back from preferences.");
+            st->guitest = 2;
         }
         else if (st->guitest == 2)
         {
@@ -188,10 +228,19 @@ static void handler(struct AGUIApp *app, struct AGEvent *ev)
         {
         case MENU_ABOUT:
             AGUI_Message(app, "About NextSync",
-                         "NextSync 1.0\n\n"
+                         "NextSync 1.1\n\n"
                          "Nextcloud folder synchronisation\n"
                          "for AmigaOS 3.1 and later.\n\n"
                          "WebDAV over TLS via AmiSSL v5.");
+            break;
+        case MENU_PREFS:
+            if (st->busy)
+                break;
+            if (nsprefs_show(app, st->conf, st->conffile))
+            {
+                refresh_config(app);
+                gui_log(app, "preferences saved.");
+            }
             break;
         case MENU_SNAP:
             AGUI_Snapshot(app, "out/nextsync.ags");
@@ -205,15 +254,16 @@ static void handler(struct AGUIApp *app, struct AGEvent *ev)
     }
 }
 
-int nextsync_gui_ex(nsconf *conf, int guitest)
+int nextsync_gui_ex(nsconf *conf, const char *conffile, int guitest)
 {
     struct AGSpec spec;
     struct gui_state st;
     struct AGUIApp *app;
 
     memset(&st, 0, sizeof(st));
-    st.conf = conf;
-    st.guitest = guitest;
+    st.conf     = conf;
+    st.conffile = conffile;
+    st.guitest  = guitest;
 
     memset(&spec, 0, sizeof(spec));
     spec.ag_Title    = "NextSync";
@@ -221,7 +271,7 @@ int nextsync_gui_ex(nsconf *conf, int guitest)
     spec.ag_Menu     = menu;
     spec.ag_Handler  = handler;
     spec.ag_UserData = &st;
-    spec.ag_MinCols  = 52;
+    spec.ag_MinCols  = 68;
     if (guitest)
         spec.ag_Ticks = 10;
 
@@ -233,7 +283,7 @@ int nextsync_gui_ex(nsconf *conf, int guitest)
     return 0;
 }
 
-int nextsync_gui(nsconf *conf)
+int nextsync_gui(nsconf *conf, const char *conffile)
 {
-    return nextsync_gui_ex(conf, 0);
+    return nextsync_gui_ex(conf, conffile, 0);
 }

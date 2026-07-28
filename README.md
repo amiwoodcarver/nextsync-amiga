@@ -6,15 +6,33 @@ verification.
 
 ![NextSync running on Workbench](docs/nextsync-gui.png)
 
-Around 39 KB. Workbench GUI and a scriptable CLI in one binary. Targets the
+Around 45 KB. Workbench GUI and a scriptable CLI in one binary. Targets the
 A1200 and A4000; tested on 68020 without an FPU and on 68040.
 
 ---
 
+## New in 1.1
+
+- **Set up from the GUI.** Project → Preferences holds the server details,
+  the folders and the local drawer. Nothing has to be written by hand.
+- **Connect tests the server and lists what is on it.** The folders on
+  your account appear in a box you tick — no typing paths, no guessing at
+  their names. A server that will not answer says so, there and then.
+- **Browse** picks the local drawer with the standard file requester.
+- **First run opens Preferences by itself** when there is no
+  configuration yet.
+- **Directory trees are removed properly.** Deleting a folder on one side
+  now clears the whole tree on the other in a single run, deepest drawer
+  first, instead of leaving the empty drawers behind.
+- **A turnkey emulator** and an offline test server, both below.
+
+1.0 configuration files still work as they are.
+
 ## What it does
 
 - **Two way sync.** Changes on either side are carried to the other. New
-  files, modified files, new directories, deletions.
+  files, modified files, new directories, deletions. Folders are followed
+  all the way down, not just their top level.
 - **Change detection that survives reboots.** The server's etag and the
   local size and modification time are recorded after every transfer, so a
   second run transfers nothing and a third run after editing one file
@@ -45,11 +63,32 @@ A1200 and A4000; tested on 68020 without an FPU and on 68040.
 
 1. Install AmiSSL 5.x with its own installer.
 2. Copy `NextSync` anywhere you like.
-3. Copy `NextSync.conf.example` next to it as `NextSync.conf` and edit it.
+3. Start it. With no configuration it opens Preferences straight away.
 
-## Configuration
+## Setting it up
 
-`NextSync.conf` lives in the same drawer as the program (`PROGDIR:`):
+![Preferences](docs/nextsync-prefs.png)
+
+Project → Preferences, or the dialog that opens by itself on a first run:
+
+1. Type the server address, your user name and your password.
+2. **Connect.** NextSync opens the connection there and then; if it
+   cannot, it tells you why and nothing is saved. On success the box
+   fills with the folders in your account.
+3. Click a folder to tick it. Ticked folders are the ones that sync.
+4. **Browse** for the drawer they should be kept in, or type a path.
+5. **Save.**
+
+Use a Nextcloud **app password** (Settings → Security on the server) rather
+than your account password: the file this writes is plain text, and an app
+password can be revoked on its own.
+
+The folder list is one level deep — the folders in your file root. That is
+what you pick; syncing then follows each one all the way down.
+
+### The file it writes
+
+`NextSync.conf`, in the same drawer as the program (`PROGDIR:`):
 
 ```
 server  cloud.example.com
@@ -57,24 +96,35 @@ port    443
 user    yourname
 pass    your-app-password
 
-pair    /Documents   DH0:Sync/Documents
-pair    /Photos      Work:Cloud/Photos
+local   DH0:Nextcloud
+folder  Documents
+folder  Photos
 ```
 
-One `pair` line per folder, up to 16. Both sides are created if missing.
+`local` is the drawer the folders live in, one `folder` line per synced
+folder, up to 16. Both sides are created if they are missing.
 
-Use a Nextcloud **app password** (Settings → Security on the server) rather
-than your account password: this file is plain text, and an app password
-can be revoked on its own.
+NextSync 1.0 wrote explicit pairs instead, and they still work:
+
+```
+pair    /Photos    Work:Cloud/Pictures
+```
+
+Those are synced as before, shown in Preferences, and written back out
+unchanged when you save — so an existing setup survives the upgrade, and a
+folder that has to live somewhere unusual can still be pinned by hand.
 
 ## Using it
 
 ```
 NextSync            open the GUI
-NextSync SYNC       sync every pair and exit, for scripts and startup
+NextSync SYNC       sync everything and exit, for scripts and startup
 NextSync LIST [p]   list a server directory
-NextSync SNAPSHOT   open the GUI, save a screen dump to out/, exit
+NextSync PREFS      open Preferences on its own
 ```
+
+Add `SNAPSHOT` to any of those to save a screen dump to `out/` once the
+window has drawn itself, and exit.
 
 During a CLI sync, CTRL-C stops cleanly after the current file finishes.
 
@@ -132,30 +182,74 @@ make TOOLCHAIN=/opt/amiga AMISSL_SDK=/path/to/AmiSSL/Developer
 
 `make CPU=68030` and `make DEBUG=1` do what you would expect.
 
-## Testing under emulation
+## Running it on an emulated Amiga
 
-Network tests run under [Amiberry](https://amiberry.com/). FS-UAE 3.x is
-**not** usable for this: its CPU core predates 2017 and double-faults
-inside AmiSSL's library init. Amiberry's `bsdsocket_emu` exposes the host
-network as a native `bsdsocket.library`, so the guest needs no TCP/IP stack.
+One command builds NextSync, installs it with a Workbench icon on a
+bootable Workbench 3.1 drive, and boots you into it:
+
+```bash
+tools/emulator.sh
+```
+
+Open the **DH0** icon, double click **NextSync**. Networking is the host's,
+through Amiberry's `bsdsocket` emulation, so there is no TCP/IP stack to
+configure inside the guest. F12 opens Amiberry's own menu; quit from there.
+
+```bash
+tools/emulator.sh a1200      # stock A1200 speed instead of an A4000/040
+tools/emulator.sh --fresh    # set the configuration aside, so Preferences
+                             # opens on startup like a first run
+tools/emulator.sh --shell    # boot to a Shell instead of Workbench
+```
+
+`emu/hd0` on the Mac *is* `DH0:` in the guest, both ways, live — so a file
+dropped in there shows up on the Amiga, and anything synced down is on
+your Mac immediately.
+
+### What it needs first
 
 ```bash
 brew install --cask amiberry
-pip3 install amitools                       # for xdftool
+pip3 install amitools                             # for xdftool
 
-tools/setup-sysdrive.sh /path/to/WORKBENCH.ADF   # emu/hd0 from Workbench 3.1
-tools/install-amissl.sh emu/hd0
-cp NextSync.conf.example emu/hd0/NextSync.conf && $EDITOR emu/hd0/NextSync.conf
-
-tools/run-emu.sh "NextSync SYNC >out/sync.log"        # 68040 + JIT, quick
-tools/run-emu.sh "NextSync SYNC >out/sync.log" a1200  # stock A1200 timing
-tools/run-emu.sh "NextSync GUITEST"                   # drives the GUI, snapshots it
+# a Kickstart 3.1 ROM for the A1200 or A4000 in kickstarts/
+tools/setup-sysdrive.sh /path/to/WORKBENCH.ADF    # builds emu/hd0
+tools/fetch-deps.sh && tools/install-amissl.sh emu/hd0
 ```
 
-Put a Kickstart ROM in `kickstarts/` (3.1 for the A1200 or A4000 — both are
-68020-only ROMs, which is fine since AmiSSL needs a 68020 regardless).
-`tools/emu-config.sh` generates the Amiberry configuration with the right
-absolute paths at run time, so nothing machine specific is committed.
+`tools/emulator.sh` checks each of these and prints the command that fixes
+whichever is missing. Kickstart ROMs and Workbench disks are Commodore's,
+so they are not in this repository.
+
+### Without a Nextcloud account
+
+`tools/mockdav.py` is a small server that speaks the part of Nextcloud's
+WebDAV that NextSync uses, backed by an ordinary directory:
+
+```bash
+python3 tools/mockdav.py emu/mockdav 8080
+```
+
+Point NextSync at `localhost` port **8080** (not 443, which means TLS) with
+any user name and password. The documentation screenshots above were taken
+against it.
+
+### Scripted tests
+
+```bash
+tools/run-emu.sh "NextSync SYNC >out/sync.log"        # 68040 + JIT, quick
+tools/run-emu.sh "NextSync SYNC >out/sync.log" a1200  # stock A1200 timing
+tools/run-emu.sh "NextSync GUITEST"                   # syncs and snapshots
+tools/run-emu.sh "NextSync PREFSTEST >out/p.log"      # drives Preferences
+```
+
+These boot, run one command, and report — no window to click. Note that
+they replace `S/Startup-Sequence` with a scripted one, and
+`tools/emulator.sh` puts the Workbench boot back; whichever ran last
+decides how `DH0:` starts.
+
+FS-UAE 3.x is **not** usable for any of this: its CPU core predates 2017
+and double-faults inside AmiSSL's library init.
 
 Anything the guest writes to `out/` appears on the host immediately; that is
 how logs and results come back. Screen snapshots are taken by the Amiga
@@ -172,7 +266,10 @@ is involved.
 | `src/nssync.c` | the three-way comparison and the transfer decisions |
 | `src/nsconf.c` | the configuration file |
 | `src/gui.c` | Workbench interface |
+| `src/nsprefs.c` | the Preferences dialog |
 | `agui/` | the Intuition/GadTools application framework this is built on, bundled from [amiga-devkit](https://github.com/axelsharper/amiga-devkit) |
+| `tools/mkicon.py` | draws the Workbench icon, geometry rather than a blob |
+| `tools/mockdav.py` | the offline stand-in for a Nextcloud server |
 
 `src/nsxml.c` has no OS dependencies and can be compiled and tested on the
 host directly.

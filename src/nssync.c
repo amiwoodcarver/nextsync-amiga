@@ -25,15 +25,20 @@ struct item
     char  path[NSDAV_MAXPATH];      /* relative, '/' separated            */
     UBYTE r_present, l_present, s_present;
     UBYTE r_dir, l_dir, s_dir;
+    UBYTE rmdir;                    /* deferred, see RMDIR_ below         */
     ULONG r_size, l_size, s_size;
     ULONG r_mtime, l_mtime, s_mtime;
     char  r_etag[128], s_etag[128];
 };
 
+#define RMDIR_LOCAL  1
+#define RMDIR_REMOTE 2
+
 struct table
 {
     struct item **v;
     LONG          n;
+    BOOL          full;             /* hit MAXENTRIES, results are partial */
 };
 
 /* ------------------------------------------------------------------ */
@@ -76,7 +81,10 @@ static struct item *tab_get(struct table *t, const char *path)
             return t->v[i];
 
     if (t->n >= MAXENTRIES)
+    {
+        t->full = TRUE;
         return NULL;
+    }
     {
         struct item *it = AllocVec(sizeof(struct item), MEMF_CLEAR | MEMF_PUBLIC);
         if (!it)
@@ -465,6 +473,7 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
     memset(st, 0, sizeof(*st));
     t.v = AllocVec(sizeof(void *) * MAXENTRIES, MEMF_CLEAR | MEMF_PUBLIC);
     t.n = 0;
+    t.full = FALSE;
     if (!t.v)
         return FALSE;
 
@@ -595,22 +604,7 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             if (x->r_present && !x->l_present)
             {
                 if (x->s_present)
-                {
-                    /* deleted locally; punt to file pass semantics:
-                     * directories are only deleted remotely when the
-                     * user emptied them, DELETE is recursive on DAV */
-                    log(user, "  rmdir remote %s", x->path);
-                    if (nsdav_delete(dav, rpath))
-                    {
-                        st->deleted_remote++;
-                        x->s_present = 0;
-                    }
-                    else
-                    {
-                        log(user, "  %s", dav->err);
-                        st->failed++;
-                    }
-                }
+                    x->rmdir = RMDIR_REMOTE;   /* deepest first, below */
                 else if (ensure_local_dirtree(local_root, x->path))
                 {
                     st->dirs_created++;
@@ -627,20 +621,7 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             else if (!x->r_present && x->l_present)
             {
                 if (x->s_present)
-                {
-                    log(user, "  rmdir local %s", x->path);
-                    if (delete_local_tree(local_root, x->path))
-                    {
-                        st->deleted_local++;
-                        x->s_present = 0;
-                    }
-                    else
-                    {
-                        /* not empty yet: contents may still be handled
-                         * later this run; try again next time */
-                        x->s_present = 1;
-                    }
-                }
+                    x->rmdir = RMDIR_LOCAL;    /* deepest first, below */
                 else
                 {
                     log(user, "  mkdir remote %s", x->path);
@@ -839,6 +820,58 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             x->s_present = 0;
         }
     }
+
+    /*
+     * Directory removals, deepest first. They have to come after the file
+     * pass -- a drawer can only be deleted once it is empty -- and in
+     * reverse path order, so "a/b" goes before "a". Doing it in the main
+     * loop instead would leave the empty drawers behind and need one more
+     * run per level of nesting to clear them.
+     */
+    for (i = t.n - 1; i >= 0; i--)
+    {
+        struct item *x = t.v[i];
+
+        if (!x->rmdir)
+            continue;
+
+        sprintf(rpath, "%s/%s", rroot, x->path);
+
+        if (x->rmdir == RMDIR_REMOTE)
+        {
+            log(user, "  rmdir remote %s", x->path);
+            if (nsdav_delete(dav, rpath))
+            {
+                st->deleted_remote++;
+                x->s_present = 0;
+            }
+            else
+            {
+                log(user, "  %s", dav->err);
+                st->failed++;
+            }
+        }
+        else
+        {
+            log(user, "  rmdir local %s", x->path);
+            if (delete_local_tree(local_root, x->path))
+            {
+                st->deleted_local++;
+                x->s_present = 0;
+            }
+            else
+            {
+                /* still not empty: something in it was skipped or failed.
+                 * Keep the state entry so the next run retries. */
+                log(user, "  %s not empty, left in place", x->path);
+                x->s_present = 1;
+            }
+        }
+    }
+
+    if (t.full)
+        log(user, "  WARNING: more than %ld entries, sync is incomplete",
+            (long)MAXENTRIES);
 
     save_state(&t, local_root);
     tab_free(&t);

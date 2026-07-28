@@ -1,6 +1,10 @@
 # NextSync configuration -- copy to the drawer NextSync lives in,
 # rename to NextSync.conf, and fill in your own details.
 #
+# You do not have to write this by hand. Start NextSync with no
+# configuration and it opens Preferences, where Connect lists the folders
+# on your account for you to pick from. This file is what it writes.
+#
 # Prefer a Nextcloud *app password* (Settings -> Security on the server)
 # over your account password: this file is plain text on the Amiga.
 
@@ -9,9 +13,18 @@ port    443
 user    yourname
 pass    your-app-password
 
-# pair <remote path, from your Nextcloud file root> <local AmigaDOS path>
-# One line per folder you want synchronised. Both sides are created if
-# they do not exist yet.
+# The drawer the synced folders are kept in. Created if it is missing.
 
-pair    /Documents      DH0:Sync/Documents
-# pair  /Photos         Work:Cloud/Photos
+local   DH0:Nextcloud
+
+# One line per folder in your Nextcloud file root that you want synced.
+# "folder Documents" keeps DH0:Nextcloud/Documents in step with
+# /Documents on the server, subfolders and all.
+
+folder  Documents
+# folder  Photos
+
+# For a folder that has to live somewhere else, an explicit pair still
+# works, and Preferences leaves it alone when it saves:
+#
+# pair    /Photos    Work:Cloud/Pictures

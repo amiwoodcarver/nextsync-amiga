@@ -2,12 +2,16 @@
  * NextSync -- Nextcloud folder synchronisation for AmigaOS 3.1+
  *
  * CLI:
- *   NextSync SYNC            sync every configured pair
+ *   NextSync SYNC            sync every configured folder
  *   NextSync LIST [path]     list a server directory
+ *   NextSync PREFS           open Preferences on its own, then exit
  *   NextSync                 open the GUI (see gui.c)
- *   NextSync SNAPSHOT        open the GUI, save a screen dump, exit
  *
- * Configuration in PROGDIR:NextSync.conf, see nsconf.h.
+ * Any argument may be followed by SNAPSHOT to dump the screen to out/ once
+ * the window has drawn itself, which is how the host side takes pictures.
+ *
+ * Configuration in PROGDIR:NextSync.conf, see nsconf.h. When it is missing
+ * or incomplete the GUI opens Preferences first.
  */
 
 #include <exec/types.h>
@@ -23,12 +27,15 @@
 #include "nsdav.h"
 #include "nssync.h"
 #include "nsconf.h"
+#include "nsprefs.h"
 #include "agui.h"
+
+#define CONFFILE "PROGDIR:NextSync.conf"
 
 unsigned long __stack = 100000;    /* OpenSSL needs room */
 
-int nextsync_gui(nsconf *conf);            /* gui.c */
-int nextsync_gui_ex(nsconf *conf, int t);
+int nextsync_gui(nsconf *conf, const char *conffile);           /* gui.c */
+int nextsync_gui_ex(nsconf *conf, const char *conffile, int t);
 
 static void cli_log(void *user, const char *fmt, ...)
 {
@@ -138,35 +145,97 @@ static int cmd_list(nsconf *conf, const char *path)
     return 0;
 }
 
+/* strip the SNAPSHOT modifier out, wherever it appears, and keep the rest */
+static int filter_args(int argc, char **argv, const char **out, int max,
+                       BOOL *snapshot)
+{
+    int i, n = 0;
+
+    *snapshot = FALSE;
+    for (i = 1; i < argc; i++)
+    {
+        if (!ns_stricmp(argv[i], "SNAPSHOT"))
+            *snapshot = TRUE;
+        else if (n < max)
+            out[n++] = argv[i];
+    }
+    return n;
+}
+
+static void usage(void)
+{
+    printf("NextSync: PROGDIR:NextSync.conf is missing or incomplete.\n"
+           "  Run NextSync with no arguments and use Preferences,\n"
+           "  or write the file by hand:\n"
+           "    server <host>\n    port <443>\n    user <name>\n"
+           "    pass <password>\n    local <DH0:Nextcloud>\n"
+           "    folder <Documents>\n");
+}
+
 int main(int argc, char **argv)
 {
     nsconf conf;
+    const char *arg[4];
+    const char *cmd;
+    BOOL snapshot, existed;
+    int nargs, rc;
 
-    if (!nsconf_load(&conf, "PROGDIR:NextSync.conf"))
+    existed = nsconf_load(&conf, CONFFILE);
+    nargs = filter_args(argc, argv, arg, 4, &snapshot);
+    cmd = nargs > 0 ? arg[0] : NULL;
+
+    if (cmd && !ns_stricmp(cmd, "SYNC"))
     {
-        printf("NextSync: no usable PROGDIR:NextSync.conf\n"
-               "  server <host>\n  port <443>\n  user <name>\n"
-               "  pass <password>\n  pair </remote/path> <local:path>\n");
-        return 20;
+        if (!nsconf_complete(&conf))
+        {
+            usage();
+            rc = 20;
+        }
+        else
+            rc = cmd_sync(&conf);
     }
-
+    else if (cmd && !ns_stricmp(cmd, "LIST"))
     {
-        int rc;
-
-        if (argc > 1 && !ns_stricmp(argv[1], "SNAPSHOT"))
+        if (!conf.server[0] || !conf.user[0])
+        {
+            usage();
+            rc = 20;
+        }
+        else
+            rc = cmd_list(&conf, nargs > 1 ? arg[1] : NULL);
+    }
+    else if (cmd && !ns_stricmp(cmd, "PREFS"))
+    {
+        if (snapshot)
+            AGUI_AutoSnapshot("out/nextsync-prefs.ags");
+        rc = nsprefs_show(NULL, &conf, CONFFILE) ? 0 : 5;
+    }
+    else if (cmd && !ns_stricmp(cmd, "PREFSTEST"))
+    {
+        rc = nsprefs_show_ex(NULL, &conf, CONFFILE, 1) ? 0 : 5;
+    }
+    else
+    {
+        if (snapshot)
             AGUI_AutoSnapshot("out/nextsync.ags");
 
-        if (argc > 1 && !ns_stricmp(argv[1], "SYNC"))
-            rc = cmd_sync(&conf);
-        else if (argc > 1 && !ns_stricmp(argv[1], "GUITEST"))
-            rc = nextsync_gui_ex(&conf, 1);
-        else if (argc > 1 && !ns_stricmp(argv[1], "LIST"))
-            rc = cmd_list(&conf, argc > 2 ? argv[2] : NULL);
-        else
-            rc = nextsync_gui(&conf);
+        /*
+         * First run, or a configuration that cannot sync anything yet:
+         * go straight to Preferences. Cancelling still opens the main
+         * window, where Project/Preferences is one menu pick away.
+         */
+        if (!existed || !nsconf_complete(&conf))
+            nsprefs_show(NULL, &conf, CONFFILE);
 
-        /* last thing before exit, see nshttp.h */
-        nshttp_shutdown();
-        return rc;
+        if (cmd && !ns_stricmp(cmd, "GUITEST"))
+            rc = nextsync_gui_ex(&conf, CONFFILE, 1);
+        else if (cmd && !ns_stricmp(cmd, "NESTTEST"))
+            rc = nextsync_gui_ex(&conf, CONFFILE, 3);
+        else
+            rc = nextsync_gui(&conf, CONFFILE);
     }
+
+    /* last thing before exit, see nshttp.h */
+    nshttp_shutdown();
+    return rc;
 }

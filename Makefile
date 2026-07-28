@@ -26,8 +26,8 @@ CPU ?= 68020
 
 TARGET := NextSync
 
-SRCS := src/main.c src/gui.c src/nshttp.c src/nsdav.c src/nsxml.c \
-        src/nssync.c src/nsconf.c
+SRCS := src/main.c src/gui.c src/nsprefs.c src/nshttp.c src/nsdav.c \
+        src/nsxml.c src/nssync.c src/nsconf.c
 AGUI := agui/src/agui.c agui/src/aguishot.c
 
 OBJS := $(SRCS:.c=.o) $(AGUI:.c=.o)

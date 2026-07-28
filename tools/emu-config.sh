@@ -4,18 +4,23 @@
 # at generation time, so nothing with a machine specific path has to be
 # committed.
 #
-#   tools/emu-config.sh <profile> [sysdrive] [kickstart] > machine.uae
+#   tools/emu-config.sh <profile> [sysdrive] [kickstart] [mode] > machine.uae
 #
 # Profiles:
 #   a4000   68040 with JIT and 64 MB Z3 fast  -- fast, for iterating
 #   a1200   68020, no FPU, 8 MB fast          -- honest stock A1200 timing
 #
+# Mode:
+#   headless     (default) minimal, for the scripted test rig
+#   interactive  windowed and scaled, for driving Workbench by hand
+#
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PROFILE="${1:?usage: emu-config.sh <a4000|a1200> [sysdrive] [kickstart]}"
+PROFILE="${1:?usage: emu-config.sh <a4000|a1200> [sysdrive] [kickstart] [mode]}"
 SYS="${2:-$ROOT/emu/hd0}"
 KICK="${3:-}"
+MODE="${4:-headless}"
 
 case "$PROFILE" in
     a4000) CPU=68040; FPU=68040; JIT=8192;  Z3=64; FAST=0; DEFROM="A4000" ;;
@@ -54,3 +59,18 @@ floppy0type=-1
 filesystem2=rw,DH0:DH0:$SYS,1
 uaehf0=dir,rw,DH0:DH0:$SYS,1
 EOF
+
+# A window you can actually work in: line doubled so the 640x256 Workbench
+# screen fills a 640x512 window rather than a letterbox strip.
+if [ "$MODE" = "interactive" ]; then
+cat <<EOF
+gfx_width=640
+gfx_height=512
+gfx_width_windowed=640
+gfx_height_windowed=512
+gfx_fullscreen_amiga=false
+gfx_linemode=double
+gfx_correct_aspect=true
+show_leds=true
+EOF
+fi

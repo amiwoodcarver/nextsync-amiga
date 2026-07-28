@@ -13,6 +13,7 @@
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
 #include <libraries/gadtools.h>
+#include <libraries/asl.h>
 
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -20,6 +21,7 @@
 #include <proto/graphics.h>
 #include <proto/gadtools.h>
 #include <proto/utility.h>
+#include <proto/asl.h>
 #include <clib/alib_protos.h>       /* NewList() and friends, from amiga.lib */
 
 #include <stdarg.h>
@@ -87,8 +89,15 @@ struct Library      *GadToolsBase = NULL;
 struct IntuitionBase *IntuitionBase = NULL;
 struct GfxBase      *GfxBase = NULL;
 struct Library      *UtilityBase = NULL;
+struct Library      *AslBase = NULL;    /* only while a requester is up */
 
-static BOOL agui_libs_opened = FALSE;
+/*
+ * How many AGUIApps currently hold the libraries open. A modal dialog is an
+ * ordinary second AGUIApp opened from inside the first one's handler, so
+ * closing it must not pull the libraries out from under the window that is
+ * still on screen.
+ */
+static LONG agui_libs_users = 0;
 
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
@@ -264,7 +273,8 @@ static UWORD widget_height(struct AGUIApp *app, struct AGWidget *w)
     switch (w->ag_Kind)
     {
     case AG_LISTVIEW:
-        return (UWORD)(4 * (app->a_FontH + 1) + 4);
+        /* ag_Max is the wanted number of visible rows, 4 if unset */
+        return (UWORD)((w->ag_Max > 0 ? w->ag_Max : 4) * (app->a_FontH + 1) + 4);
     case AG_SPACE:
         return (UWORD)(app->a_FontH / 2);
     default:
@@ -408,9 +418,10 @@ static void compute_rows(struct AGUIApp *app)
             }
         }
         app->a_Rows[r].r_Count++;
+        /* AGF_GROW alone decides vertical growth. AGF_NOWEIGHT is about
+         * width, and a list that should not stretch downwards must not be
+         * forced to stop stretching sideways as well. */
         if (w->ag_Flags & AGF_GROW)
-            app->a_Rows[r].r_VWeight = 1;
-        if (w->ag_Kind == AG_LISTVIEW && !(w->ag_Flags & AGF_NOWEIGHT))
             app->a_Rows[r].r_VWeight = 1;
     }
 
@@ -848,10 +859,22 @@ static void timer_close(struct AGUIApp *app)
 /* open / close                                                        */
 /* ------------------------------------------------------------------ */
 
+static void drop_libs(void)
+{
+    if (UtilityBase)   { CloseLibrary(UtilityBase);   UtilityBase = NULL; }
+    if (GadToolsBase)  { CloseLibrary(GadToolsBase);  GadToolsBase = NULL; }
+    if (GfxBase)       { CloseLibrary((struct Library *)GfxBase); GfxBase = NULL; }
+    if (IntuitionBase) { CloseLibrary((struct Library *)IntuitionBase);
+                         IntuitionBase = NULL; }
+}
+
 static BOOL open_libs(void)
 {
-    if (agui_libs_opened)
+    if (agui_libs_users > 0)
+    {
+        agui_libs_users++;
         return TRUE;
+    }
 
     /* v37 across the board: that is OS 2.04, which is as far back as
      * gadtools goes. Anything newer is used only after a version check. */
@@ -862,20 +885,19 @@ static BOOL open_libs(void)
 
     if (IntuitionBase && GfxBase && GadToolsBase && UtilityBase)
     {
-        agui_libs_opened = TRUE;
+        agui_libs_users = 1;
         return TRUE;
     }
+    drop_libs();               /* a partial open owns nothing */
     return FALSE;
 }
 
 static void close_libs(void)
 {
-    if (UtilityBase)   { CloseLibrary(UtilityBase);   UtilityBase = NULL; }
-    if (GadToolsBase)  { CloseLibrary(GadToolsBase);  GadToolsBase = NULL; }
-    if (GfxBase)       { CloseLibrary((struct Library *)GfxBase); GfxBase = NULL; }
-    if (IntuitionBase) { CloseLibrary((struct Library *)IntuitionBase);
-                         IntuitionBase = NULL; }
-    agui_libs_opened = FALSE;
+    if (agui_libs_users <= 0)
+        return;
+    if (--agui_libs_users == 0)
+        drop_libs();
 }
 
 struct AGUIApp *AGUI_Open(struct AGSpec *spec)
@@ -887,10 +909,7 @@ struct AGUIApp *AGUI_Open(struct AGSpec *spec)
     if (!spec || !spec->ag_Widgets)
         return NULL;
     if (!open_libs())
-    {
-        close_libs();
         return NULL;
-    }
 
     app = AllocMem(sizeof(struct AGUIApp), MEMF_CLEAR | MEMF_PUBLIC);
     if (!app)
@@ -1159,6 +1178,7 @@ void AGUI_Run(struct AGUIApp *app)
             if (app->a_ShotCountdown && --app->a_ShotCountdown == 0)
             {
                 AGUI_Snapshot(app, (CONST_STRPTR)agui_autoshot);
+                agui_autoshot[0] = 0;   /* one shot: the first window only */
                 AGUI_Quit(app);
             }
             if (!app->a_Done)
@@ -1410,7 +1430,25 @@ void AGUI_Disable(struct AGUIApp *app, UWORD id, BOOL disabled)
 /* list views                                                          */
 /* ------------------------------------------------------------------ */
 
-static void relink_list(struct AGUIApp *app, struct AGWidget *w)
+/* current scroll position, or 0 where the release cannot report it */
+static LONG list_top(struct AGUIApp *app, struct AGWidget *w)
+{
+    LONG top = 0;
+
+    if (w->ag_Gadget)
+        GT_GetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
+                          GTLV_Top, (ULONG)&top, TAG_END);
+    return top < 0 ? 0 : top;
+}
+
+/*
+ * Reattach the label list after it has been changed. top < 0 means follow
+ * the tail, which is what a log wants: always show the newest line. A list
+ * the user picks from wants the opposite -- rewriting an entry must not
+ * scroll the view out from under them -- so it passes the position it read
+ * before the rebuild.
+ */
+static void relink_list(struct AGUIApp *app, struct AGWidget *w, LONG top)
 {
     struct AGList *l = (struct AGList *)w->ag_Private;
     LONG count = 0;
@@ -1420,13 +1458,16 @@ static void relink_list(struct AGUIApp *app, struct AGWidget *w)
         return;
     for (n = l->al_List.lh_Head; n->ln_Succ; n = n->ln_Succ)
         count++;
-    /* detach before touching the list, as the autodocs require; then
-     * follow the tail so a log style list always shows the newest line */
+
+    if (top < 0 || top >= count)
+        top = count > 0 ? count - 1 : 0;
+
+    /* detach before touching the list, as the autodocs require */
     GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
                       GTLV_Labels, (ULONG)~0, TAG_END);
     GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
                       GTLV_Labels, (ULONG)&l->al_List,
-                      GTLV_Top,    (ULONG)(count > 0 ? count - 1 : 0),
+                      GTLV_Top,    (ULONG)top,
                       TAG_END);
 }
 
@@ -1457,16 +1498,18 @@ void AGUI_AddItem(struct AGUIApp *app, UWORD id, CONST_STRPTR text)
         GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
                           GTLV_Labels, (ULONG)~0, TAG_END);
     list_add((struct AGList *)w->ag_Private, text);
-    relink_list(app, w);
+    relink_list(app, w, -1);           /* a log follows its newest line */
 }
 
 void AGUI_SetList(struct AGUIApp *app, UWORD id, STRPTR *items)
 {
     struct AGWidget *w = find_widget(app, id);
     STRPTR *p;
+    LONG top;
 
     if (!w || !w->ag_Private)
         return;
+    top = list_top(app, w);            /* read before detaching */
     if (w->ag_Gadget)
         GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
                           GTLV_Labels, (ULONG)~0, TAG_END);
@@ -1474,7 +1517,7 @@ void AGUI_SetList(struct AGUIApp *app, UWORD id, STRPTR *items)
     if (items)
         for (p = items; *p; p++)
             list_add((struct AGList *)w->ag_Private, *p);
-    relink_list(app, w);
+    relink_list(app, w, top);
 }
 
 STRPTR AGUI_GetItem(struct AGUIApp *app, UWORD id, LONG index)
@@ -1520,4 +1563,49 @@ BOOL AGUI_Ask(struct AGUIApp *app, CONST_STRPTR title, CONST_STRPTR body)
     es.es_GadgetFormat = (STRPTR)"Yes|No";
 
     return (BOOL)(EasyRequestArgs(app ? app->a_Window : NULL, &es, NULL, NULL) == 1);
+}
+
+/*
+ * asl.library is opened per request rather than held: a drawer requester is
+ * a once-in-a-while thing, and this keeps it out of the startup path of
+ * applications that never ask for one.
+ */
+BOOL AGUI_RequestDir(struct AGUIApp *app, CONST_STRPTR title,
+                     char *path, LONG len)
+{
+    struct FileRequester *fr;
+    BOOL ok = FALSE;
+
+    if (!path || len < 2)
+        return FALSE;
+
+    /* v37 so this still works on 2.04; ASLFR_DrawersOnly arrived with v38
+     * and older releases simply ignore it and show files as well */
+    AslBase = OpenLibrary("asl.library", 37);
+    if (!AslBase)
+        return FALSE;
+
+    fr = (struct FileRequester *)AllocAslRequestTags(ASL_FileRequest,
+            ASLFR_Window,        (ULONG)(app ? app->a_Window : NULL),
+            ASLFR_TitleText,     (ULONG)(title ? title
+                                               : (CONST_STRPTR)"Select a drawer"),
+            ASLFR_InitialDrawer, (ULONG)path,
+            ASLFR_DrawersOnly,   TRUE,
+            ASLFR_SleepWindow,   TRUE,
+            TAG_END);
+
+    if (fr)
+    {
+        if (AslRequest(fr, NULL) && fr->fr_Drawer)
+        {
+            strncpy(path, (char *)fr->fr_Drawer, len - 1);
+            path[len - 1] = 0;
+            ok = TRUE;
+        }
+        FreeAslRequest(fr);
+    }
+
+    CloseLibrary(AslBase);
+    AslBase = NULL;
+    return ok;
 }
