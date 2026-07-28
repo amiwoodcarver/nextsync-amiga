@@ -73,7 +73,7 @@ make -s || exit 1
 
 echo "==> installing on $SYS"
 cp NextSync "$SYS/NextSync" && chmod 755 "$SYS/NextSync"
-python3 tools/mkicon.py "$SYS/NextSync.info" 100000
+python3 tools/mkicon.py --stack 100000 "$SYS/NextSync.info"
 say "NextSync + icon in DH0:"
 
 mkdir -p "$SYS/out"
@@ -100,6 +100,7 @@ fi
     cat <<'EOF'
 FailAt 21
 C:SetPatch QUIET
+C:Version >NIL:
 C:AddBuffers >NIL: DH0: 30
 C:MakeDir >NIL: RAM:T RAM:Clipboards RAM:Env RAM:Env/Sys
 C:Assign >NIL: ENV: RAM:Env
@@ -107,8 +108,17 @@ C:Assign >NIL: T: RAM:T
 C:Assign >NIL: CLIPS: RAM:Clipboards
 C:Assign >NIL: ENVARC: SYS:Prefs/Env-Archive
 C:Assign >NIL: REXX: SYS:Rexxc
+C:Assign >NIL: FONTS: SYS:Fonts
 C:Copy >NIL: ENVARC: ENV: ALL QUIET
 C:Assign >NIL: AmiSSL: SYS:AmiSSL
+IF EXISTS SYS:Locale
+  C:Assign >NIL: LOCALE: SYS:Locale
+  C:Assign >NIL: HELP: LOCALE:Help DEFER
+ENDIF
+C:ConClip
+; datatypes has to be registered or MultiView cannot identify anything,
+; not even plain text -- this is what lets a .guide be opened
+C:AddDataTypes REFRESH QUIET
 EOF
     if [ "$BOOT" = workbench ]; then
         cat <<'EOF'

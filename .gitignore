@@ -24,6 +24,9 @@
 /emu/configs/*.uae
 /emu/mockdav
 
+# Workbench hard disk images: Commodore's, and 100 MB apiece
+*.hdf
+
 # Credentials: this holds a server password in plain text
 NextSync.conf
 !NextSync.conf.example
