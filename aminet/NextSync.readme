@@ -122,7 +122,7 @@ INSTALLING
 
 SOURCE
 
-  https://github.com/axelsharper/nextsync-amiga
+  https://github.com/amiwoodcarver/nextsync-amiga
 
   Written in C for m68k-amigaos-gcc. The repository has the build
   environment, the emulator test rig and notes on the AmigaOS specifics

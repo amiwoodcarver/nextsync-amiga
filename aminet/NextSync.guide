@@ -434,7 +434,7 @@ axel.hubinette@@gmail.com
 
 @{b}Source@{ub}
 
-    https://github.com/axelsharper/nextsync-amiga
+    https://github.com/amiwoodcarver/nextsync-amiga
 
 C, built with m68k-amigaos-gcc. The repository has the whole build
 environment, the emulator test rig, and a file of notes on the AmigaOS
