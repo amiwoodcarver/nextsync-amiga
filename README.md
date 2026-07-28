@@ -306,7 +306,7 @@ The readme and the manual are hand written in `aminet/`.
 | `src/gui.c` | Workbench interface |
 | `src/nsprefs.c` | the Preferences dialog |
 | `src/nstest.c` | synthetic keystrokes, so the self tests can reach paths only a keyboard can |
-| `agui/` | the Intuition/GadTools application framework this is built on, bundled from [amiga-devkit](https://github.com/axelsharper/amiga-devkit) |
+| `agui/` | the Intuition/GadTools application framework this is built on, bundled from [amiga-devkit](https://github.com/amiwoodcarver/amiga-devkit) |
 | `tools/mkicon.py` | draws the Workbench icon, geometry rather than a blob |
 | `tools/mockdav.py` | the offline stand-in for a Nextcloud server |
 
