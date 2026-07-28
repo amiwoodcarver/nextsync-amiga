@@ -1,6 +1,6 @@
 # Platform notes
 
-Six AmigaOS specifics that each cost a real debugging session while
+Seven AmigaOS specifics that each cost a real debugging session while
 building NextSync. Written down because none of them announce themselves
 and all of them look like something else at first.
 
@@ -140,6 +140,51 @@ appears to win over the one an injected event asks for.
 the keyboard — which is a good idea regardless, since a keyboard route
 into an action is worth having for its own sake. Buttons stay a
 by-hand check.
+
+## 7. Datatypes need one assign that is easy to leave out
+
+**Symptom.** MultiView answers `Unknown data type` for every file it is
+given — the AmigaGuide manual, a plain text file, anything. The
+descriptors are in `DEVS:DataTypes`, the classes are in
+`SYS:Classes/DataTypes`, `AddDataTypes REFRESH` returns success, and
+nothing opens.
+
+Worse, the system will tell you it is fine. A program that opens
+`datatypes.library` and calls `ObtainDataTypeA()` on the same file
+identifies it correctly:
+
+```
+dt: NextSync.guide      -> group docu id amig name AmigaGuide
+dt: S:Startup-Sequence  -> group text id asci name ascii
+```
+
+So identification works, and the file is provably not the problem, and
+MultiView still will not open it.
+
+**Cause.** Two halves in two places. Identification only needs the
+descriptors in `DEVS:DataTypes`, which is why the probe above succeeds.
+Actually *opening* the file needs the class — `amigaguide.datatype`,
+`ascii.datatype` — and those live in `SYS:Classes/DataTypes`, which
+nothing looks in unless the boot script has said so:
+
+```
+Assign >NIL: LIBS: SYS:Classes ADD
+```
+
+That line is in Commodore's hard drive Startup-Sequence. It is easy to
+leave out of a boot script written by hand, and when it is missing
+`AddDataTypes` has no complaint to make: it did its job.
+
+**Fix.** Put the assign in the boot script. While you are there, a system
+drive assembled from the install disks by hand also wants a `Fonts`
+drawer — without one `FONTS:` quietly falls back to the volume root —
+plus `LOCALE:`, `HELP:` and `C:ConClip`.
+
+The wider lesson is about the environment rather than the code: a
+Workbench put together from the Workbench disk alone is not a Workbench,
+and time spent debugging software on one is usually time spent debugging
+the drive. Boot a real install before concluding anything about your own
+program.
 
 ---
 

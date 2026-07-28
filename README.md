@@ -315,7 +315,7 @@ host directly.
 
 ## Platform notes
 
-Six AmigaOS specifics cost real debugging time here. They are written up in
+Seven AmigaOS specifics cost real debugging time here. They are written up in
 **[docs/platform-notes.md](docs/platform-notes.md)** — worth reading before
 touching the AmiSSL or linking setup, and possibly useful for anyone else
 writing a networked Amiga program in 2026.
