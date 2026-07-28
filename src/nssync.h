@@ -27,6 +27,7 @@ typedef struct nssync_stats
 {
     ULONG downloaded, uploaded, deleted_local, deleted_remote;
     ULONG dirs_created, conflicts, skipped, failed, unchanged;
+    BOOL  aborted;              /* file_cb asked to stop */
 } nssync_stats;
 
 /*

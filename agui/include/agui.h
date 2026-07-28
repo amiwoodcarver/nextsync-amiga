@@ -34,6 +34,7 @@
 #define AG_SLIDER    7   /* horizontal slider, ag_Min..ag_Max          */
 #define AG_LISTVIEW  8   /* scrolling list, filled with AGUI_SetList() */
 #define AG_SPACE     9   /* blank filler, useful to push things around */
+#define AG_PASSWORD  10  /* like AG_STRING, shown as asterisks          */
 
 /* ------------------------------------------------------------------ */
 /* widget flags                                                        */
@@ -60,7 +61,8 @@ struct AGWidget
     LONG    ag_Max;         /* AG_SLIDER; AG_LISTVIEW: visible rows    */
     LONG    ag_Value;       /* initial value / checked / active        */
     STRPTR  ag_Text;        /* AG_TEXT initial contents                */
-    ULONG   ag_MaxChars;    /* AG_STRING buffer size (default 128)     */
+    ULONG   ag_MaxChars;    /* AG_STRING/AG_PASSWORD buffer size, 128; */
+                            /* AG_BUTTON: width to reserve, in chars   */
 
     /* -- filled in by the framework, do not touch -- */
     struct Gadget *ag_Gadget;
@@ -128,6 +130,23 @@ void            AGUI_Quit(struct AGUIApp *app);
 APTR            AGUI_UserData(struct AGUIApp *app);
 struct Window  *AGUI_Window(struct AGUIApp *app);
 
+/*
+ * The Intuition gadget behind a widget, for the occasions the framework
+ * has no wrapper for -- ActivateGadget(), say. NULL between a resize and
+ * the rebuild that follows it, so check it every time rather than keeping
+ * the pointer.
+ */
+struct Gadget  *AGUI_Gadget(struct AGUIApp *app, UWORD id);
+
+/*
+ * Runs any events already waiting and returns immediately, unlike
+ * AGUI_Run() which waits for them. Call it from inside a long job so the
+ * window still redraws and its buttons still work -- that is how a job
+ * started from the handler can offer a way to stop it. The handler has to
+ * expect to be called while it is already running.
+ */
+void            AGUI_Poll(struct AGUIApp *app);
+
 /* value access, all by widget id */
 STRPTR          AGUI_GetString(struct AGUIApp *app, UWORD id);
 void            AGUI_SetString(struct AGUIApp *app, UWORD id, CONST_STRPTR s);
@@ -136,6 +155,12 @@ void            AGUI_SetValue(struct AGUIApp *app, UWORD id, LONG value);
 void            AGUI_SetText(struct AGUIApp *app, UWORD id, CONST_STRPTR s);
 void            AGUI_SetTextF(struct AGUIApp *app, UWORD id, CONST_STRPTR fmt, ...);
 void            AGUI_Disable(struct AGUIApp *app, UWORD id, BOOL disabled);
+
+/*
+ * Retitles a button in place. The gadget is not re-laid-out, so reserve
+ * room for the longest text it will carry with ag_MaxChars.
+ */
+void            AGUI_SetLabel(struct AGUIApp *app, UWORD id, CONST_STRPTR s);
 
 /* list views */
 void            AGUI_SetList(struct AGUIApp *app, UWORD id, STRPTR *items);

@@ -332,14 +332,39 @@ BOOL nsdav_download(nsdav *d, const char *path, const char *localfile,
         return FALSE;
     }
 
-    if (nshttp_get_file(d->http, url, fh, &resp) != 0 || resp.status != 200)
+    if (nshttp_get_file(d->http, url, fh, &resp) != 0)
+    {
+        /* the transport gave up. The status may well say 200 -- the
+         * headers arrived, the body did not -- so report what actually
+         * went wrong rather than the status. */
+        Close(fh);
+        DeleteFile((STRPTR)tmp);
+        sprintf(d->err, "GET %s: %s", path, nshttp_error(d->http));
+        return FALSE;
+    }
+    if (resp.status != 200)
     {
         Close(fh);
         DeleteFile((STRPTR)tmp);
-        if (resp.status > 0)
-            sprintf(d->err, "GET %s: HTTP %ld", path, (long)resp.status);
-        else
-            sprintf(d->err, "GET %s: %s", path, nshttp_error(d->http));
+        sprintf(d->err, "GET %s: HTTP %ld", path, (long)resp.status);
+        return FALSE;
+    }
+
+    /*
+     * The transport already fails a transfer that is cut short, but only
+     * when it knows how long the body was meant to be. Checking the bytes
+     * that actually reached the disk against the header is the last thing
+     * standing between a truncated file and being renamed into place and
+     * recorded as a good copy -- after which nothing would ever notice.
+     */
+    if (resp.content_length > 0 &&
+        (ULONG)resp.body_len != resp.content_length)
+    {
+        Close(fh);
+        DeleteFile((STRPTR)tmp);
+        sprintf(d->err, "GET %s: short transfer, %lu of %lu bytes",
+                path, (unsigned long)resp.body_len,
+                (unsigned long)resp.content_length);
         return FALSE;
     }
     Close(fh);

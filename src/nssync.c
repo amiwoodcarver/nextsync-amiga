@@ -146,6 +146,14 @@ static BOOL path_ok(const char *path)
     return TRUE;
 }
 
+/* does name end in the given suffix? */
+static BOOL ends_with(const char *name, const char *suffix)
+{
+    LONG n = strlen(name), s = strlen(suffix);
+
+    return (BOOL)(n >= s && !strcmp(name + n - s, suffix));
+}
+
 /* ------------------------------------------------------------------ */
 /* scanning                                                            */
 /* ------------------------------------------------------------------ */
@@ -189,12 +197,17 @@ static BOOL scan_remote(nsdav *dav, struct table *t, const char *dir,
     return TRUE;
 }
 
+#define MAXSTALE 16
+
 static void scan_local_dir(struct table *t, const char *root,
-                           const char *rel, int depth)
+                           const char *rel, int depth,
+                           nssync_log_fn log, void *user)
 {
     char full[NSDAV_MAXPATH];
     BPTR lock;
     struct FileInfoBlock *fib;
+    char stale[MAXSTALE][108];       /* leftovers to remove after ExNext */
+    LONG nstale = 0, k;
 
     if (depth > 16)
         return;
@@ -223,6 +236,21 @@ static void scan_local_dir(struct table *t, const char *root,
             if (fib->fib_FileName[0] == '.')
                 continue;                    /* state file, temp files */
 
+            /*
+             * A .nspart is the half of a download that never finished --
+             * the machine lost power, or NextSync was killed. It is not
+             * the user's file and must never be mistaken for one: left in
+             * the table it would look like something new on this side and
+             * be uploaded to the server. Note it and delete it below,
+             * once ExNext has finished walking this directory.
+             */
+            if (ends_with(fib->fib_FileName, ".nspart"))
+            {
+                if (nstale < MAXSTALE)
+                    strcpy(stale[nstale++], fib->fib_FileName);
+                continue;
+            }
+
             if (rel[0])
                 sprintf(childrel, "%s/%s", rel, fib->fib_FileName);
             else
@@ -239,11 +267,27 @@ static void scan_local_dir(struct table *t, const char *root,
                 }
             }
             if (fib->fib_DirEntryType > 0)
-                scan_local_dir(t, root, childrel, depth + 1);
+                scan_local_dir(t, root, childrel, depth + 1, log, user);
         }
     }
     FreeDosObject(DOS_FIB, fib);
     UnLock(lock);
+
+    for (k = 0; k < nstale; k++)
+    {
+        char victim[NSDAV_MAXPATH];
+
+        if (rel[0])
+            sprintf(victim, "%s/%s", rel, stale[k]);
+        else
+            strcpy(victim, stale[k]);
+        {
+            char path[NSDAV_MAXPATH];
+            local_path(root, victim, path);
+            if (DeleteFile((STRPTR)path))
+                log(user, "  discarded unfinished download %s", victim);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -571,7 +615,7 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
     }
 
     log(user, "scanning local...");
-    scan_local_dir(&t, local_root, "", 0);
+    scan_local_dir(&t, local_root, "", 0, log, user);
     load_state(&t, local_root);
     sort_items(&t);
 
@@ -664,7 +708,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
                 /* unchanged remotely, gone locally -> delete remote */
                 if (file_cb && !file_cb(user, "delete", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 log(user, "  delete remote %s", x->path);
                 if (nsdav_delete(dav, rpath))
                 {
@@ -682,7 +729,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
                 /* new (or changed) on server -> download */
                 if (file_cb && !file_cb(user, "download", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 ensure_parent(local_root, x->path);
                 if (nsdav_download(dav, rpath, lpath, x->s_etag))
                 {
@@ -706,7 +756,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             {
                 if (file_cb && !file_cb(user, "delete local", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 log(user, "  delete local %s", x->path);
                 if (delete_local_tree(local_root, x->path))
                 {
@@ -720,7 +773,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             {
                 if (file_cb && !file_cb(user, "upload", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 if (nsdav_upload(dav, rpath, lpath, x->l_mtime, x->s_etag))
                 {
                     st->uploaded++;
@@ -753,7 +809,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
 
                 if (file_cb && !file_cb(user, "download", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 if (nsdav_download(dav, rpath, lpath, x->s_etag))
                 {
                     set_local_mtime(local_root, x->path, x->r_mtime);
@@ -773,7 +832,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             {
                 if (file_cb && !file_cb(user, "download", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 if (nsdav_download(dav, rpath, lpath, x->s_etag))
                 {
                     set_local_mtime(local_root, x->path, x->r_mtime);
@@ -793,7 +855,10 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
             {
                 if (file_cb && !file_cb(user, "upload", x->path,
                                         ++done_work, total_work))
+                {
+                    st->aborted = TRUE;
                     break;
+                }
                 if (nsdav_upload(dav, rpath, lpath, x->l_mtime, x->s_etag))
                 {
                     st->uploaded++;
@@ -828,7 +893,7 @@ BOOL nssync_run(nsdav *dav, const char *remote_root, const char *local_root,
      * loop instead would leave the empty drawers behind and need one more
      * run per level of nesting to clear them.
      */
-    for (i = t.n - 1; i >= 0; i--)
+    for (i = t.n - 1; i >= 0 && !st->aborted; i--)
     {
         struct item *x = t.v[i];
 

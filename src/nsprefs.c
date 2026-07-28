@@ -9,10 +9,15 @@
 
 #include <exec/types.h>
 #include <exec/memory.h>
+#include <exec/io.h>
+#include <devices/input.h>
+#include <devices/inputevent.h>
 #include <intuition/intuition.h>
 #include <libraries/gadtools.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/intuition.h>
+#include <clib/alib_protos.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +27,7 @@
 #include "nsdav.h"
 #include "nsconf.h"
 #include "nsprefs.h"
+#include "nstest.h"
 
 #define ID_SERVER   1
 #define ID_CONNECT  2
@@ -61,7 +67,7 @@ static struct AGWidget widgets[] =
     { AG_STRING,   ID_SERVER,  "Server:",   0,            NULL, 0, 0, 0, NULL, 127 },
     { AG_BUTTON,   ID_CONNECT, "Connect",   AGF_SAMEROW },
     { AG_STRING,   ID_USER,    "User:",     0,            NULL, 0, 0, 0, NULL, 63 },
-    { AG_STRING,   ID_PASS,    "Password:", 0,            NULL, 0, 0, 0, NULL, 127 },
+    { AG_PASSWORD, ID_PASS,    "Password:", 0,            NULL, 0, 0, 0, NULL, 127 },
     { AG_INTEGER,  ID_PORT,    "Port:",     AGF_NOWEIGHT, NULL, 0, 0, 443 },
     { AG_TEXT,     ID_STATUS,  NULL,        0,            NULL, 0, 0, 0,
       (STRPTR)"Enter your server details, then Connect." },
@@ -346,6 +352,34 @@ static LONG name_index(struct prefs_state *ps, const char *want)
     return -1;
 }
 
+static void test_password(struct AGUIApp *app)
+{
+    /* Amiga raw key codes: a b c backspace d */
+    static const UWORD keys[] = { 0x20, 0x35, 0x33, 0x41, 0x22 };
+    struct Gadget *g = AGUI_Gadget(app, ID_PASS);
+    struct StringInfo *si;
+    UWORD i;
+
+    if (!g)
+    {
+        printf("pw: no gadget\n");
+        return;
+    }
+
+    AGUI_SetString(app, ID_PASS, (CONST_STRPTR)"");
+    ActivateGadget(g, AGUI_Window(app), NULL);
+    Delay(10);
+
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        nstest_key(keys[i]);
+
+    si = (struct StringInfo *)g->SpecialInfo;
+    printf("pw: typed abc<bs>d -> kept \"%s\", shown \"%s\"\n",
+           (char *)AGUI_GetString(app, ID_PASS),
+           si && si->Buffer ? (char *)si->Buffer : "?");
+    fflush(stdout);
+}
+
 static void test_step(struct AGUIApp *app)
 {
     struct prefs_state *ps = (struct prefs_state *)AGUI_UserData(app);
@@ -353,12 +387,19 @@ static void test_step(struct AGUIApp *app)
     switch (++ps->step)
     {
     case 1:
+        test_password(app);
+        /* put back what the configuration file had, so the connection
+         * below is a real one */
+        AGUI_SetString(app, ID_PASS, (CONST_STRPTR)ps->backup.pass);
+        break;
+
+    case 2:
         printf("prefs: connect\n");
         do_connect(app);
         printf("prefs: %ld folders listed\n", (long)ps->nnames);
         break;
 
-    case 2:
+    case 3:
         {
             static const char *want[] = { "Documents", "Photos", NULL };
             int k;
@@ -372,11 +413,11 @@ static void test_step(struct AGUIApp *app)
         }
         break;
 
-    case 3:
+    case 4:
         AGUI_Snapshot(app, "out/nextsync-prefs.ags");
         break;
 
-    case 4:
+    case 5:
         printf("prefs: save\n");
         do_save(app);
         if (!ps->saved)

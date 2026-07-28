@@ -12,8 +12,10 @@
 #include <graphics/gfxbase.h>
 #include <intuition/intuition.h>
 #include <intuition/screens.h>
+#include <intuition/sghooks.h>
 #include <libraries/gadtools.h>
 #include <libraries/asl.h>
+#include <utility/hooks.h>
 
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -224,6 +226,143 @@ static void list_add(struct AGList *l, CONST_STRPTR text)
 /* widget lookup                                                       */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* password gadgets                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A GadTools string gadget shows whatever is in its buffer, so a password
+ * field keeps two: the gadget holds asterisks, and the text the user
+ * actually typed lives here, out of sight of anyone reading over their
+ * shoulder or looking at a screenshot.
+ *
+ * They are kept in step by a string edit hook. Intuition applies each
+ * keystroke to a work buffer and then calls the hook, which works out
+ * what changed, makes the same change to the real text, and hands back a
+ * row of asterisks to display.
+ *
+ * The character just typed is left legible until the next keystroke, and
+ * is covered up when the gadget is left. That is the useful half of the
+ * "show it for a moment" behaviour without a timer poking at a gadget
+ * somebody is in the middle of editing.
+ */
+struct AGPassword
+{
+    struct Hook      pw_Hook;
+    struct AGWidget *pw_Widget;
+    ULONG            pw_Max;
+    char             pw_Mask[1];   /* pw_Max+1 asterisks, then pw_Max+1
+                                    * bytes of real text -- see pw_real */
+};
+
+static char *pw_real(struct AGPassword *p)
+{
+    return p->pw_Mask + p->pw_Max + 1;
+}
+
+static void pw_mask(struct AGPassword *p, LONG len)
+{
+    LONG i;
+
+    if (len > (LONG)p->pw_Max)
+        len = p->pw_Max;
+    for (i = 0; i < len; i++)
+        p->pw_Mask[i] = '*';
+    p->pw_Mask[len] = 0;
+}
+
+static ULONG pw_edit(struct Hook *hook, struct SGWork *sgw, ULONG *cmd)
+{
+    struct AGPassword *p = (struct AGPassword *)hook->h_Data;
+    char *real;
+    LONG oldlen, newlen, pos, i, reveal = -1;
+
+    if (!p || *cmd != SGH_KEY)
+        return 0;                      /* not ours, let Intuition decide */
+
+    real   = pw_real(p);
+    oldlen = (LONG)strlen(real);
+    newlen = sgw->NumChars;
+    pos    = sgw->BufferPos;
+
+    if (newlen < 0 || newlen > (LONG)p->pw_Max)
+        return 0;
+    if (pos < 0)
+        pos = 0;
+    if (pos > newlen)
+        pos = newlen;
+
+    if (newlen > oldlen)
+    {
+        /* n characters were inserted, ending at the cursor */
+        LONG n  = newlen - oldlen;
+        LONG at = pos - n;
+
+        if (at < 0)
+            at = 0;
+        memmove(real + at + n, real + at, (size_t)(oldlen - at + 1));
+        for (i = 0; i < n; i++)
+            real[at + i] = sgw->WorkBuffer[at + i];
+        if (n == 1)
+            reveal = at;
+    }
+    else if (newlen < oldlen)
+    {
+        /*
+         * n characters were removed at the cursor. Backspace leaves the
+         * cursor where the deleted character was, and so does delete, so
+         * one case covers both -- and also the clear and delete-to-end
+         * keys, which land at 0 and at the cursor respectively.
+         */
+        LONG n  = oldlen - newlen;
+        LONG at = pos;
+
+        if (at > newlen)
+            at = newlen;
+        memmove(real + at, real + at + n, (size_t)(oldlen - at - n + 1));
+    }
+
+    for (i = 0; i < newlen; i++)
+        sgw->WorkBuffer[i] = (i == reveal) ? real[i] : '*';
+    sgw->WorkBuffer[newlen] = 0;
+
+    sgw->Actions |= SGA_USE | SGA_REDISPLAY;
+    return ~0UL;
+}
+
+static struct AGPassword *pw_new(struct AGWidget *w)
+{
+    ULONG max = w->ag_MaxChars ? w->ag_MaxChars : 128;
+    struct AGPassword *p = AllocVec(sizeof(struct AGPassword) + 2 * (max + 1),
+                                    MEMF_CLEAR | MEMF_PUBLIC);
+
+    if (!p)
+        return NULL;
+    p->pw_Max    = max;
+    p->pw_Widget = w;
+    p->pw_Hook.h_Entry    = (ULONG (*)())HookEntry;
+    p->pw_Hook.h_SubEntry = (ULONG (*)())pw_edit;
+    p->pw_Hook.h_Data     = p;
+
+    if (w->ag_Text)
+        strncpy(pw_real(p), (char *)w->ag_Text, max);
+    pw_mask(p, (LONG)strlen(pw_real(p)));
+    return p;
+}
+
+/* cover the character the hook left legible */
+static void pw_hide(struct AGUIApp *app, struct AGWidget *w)
+{
+    struct AGPassword *p = (struct AGPassword *)w->ag_Private;
+
+    if (!p)
+        return;
+    pw_mask(p, (LONG)strlen(pw_real(p)));
+    if (w->ag_Gadget)
+        GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
+                          GTST_String, (ULONG)p->pw_Mask, TAG_END);
+}
+
 static struct AGWidget *find_widget(struct AGUIApp *app, UWORD id)
 {
     UWORD i;
@@ -334,6 +473,13 @@ static UWORD widget_natural_width(struct AGUIApp *app, struct AGWidget *w)
         n = (UWORD)(text_width(app, w->ag_Label) + 3 * app->a_FontW);
         if (n < 8 * app->a_FontW)
             n = (UWORD)(8 * app->a_FontW);
+        /* room for a longer title the application may set later */
+        if (w->ag_MaxChars)
+        {
+            UWORD want = (UWORD)((w->ag_MaxChars + 3) * app->a_FontW);
+            if (want > n)
+                n = want;
+        }
         break;
 
     case AG_CHECKBOX:
@@ -506,6 +652,20 @@ static struct Gadget *make_gadget(struct AGUIApp *app, struct Gadget *prev,
                                                               : (STRPTR)""),
                          GTST_MaxChars, (ULONG)(w->ag_MaxChars ? w->ag_MaxChars : 128),
                          TAG_END);
+        break;
+
+    case AG_PASSWORD:
+        {
+            struct AGPassword *p = (struct AGPassword *)w->ag_Private;
+
+            if (!p)
+                return prev;
+            g = CreateGadget(STRING_KIND, prev, ng,
+                             GTST_String,   (ULONG)p->pw_Mask,
+                             GTST_MaxChars, (ULONG)p->pw_Max,
+                             GTST_EditHook, (ULONG)&p->pw_Hook,
+                             TAG_END);
+        }
         break;
 
     case AG_INTEGER:
@@ -948,6 +1108,11 @@ struct AGUIApp *AGUI_Open(struct AGSpec *spec)
 
         if (w->ag_Kind == AG_LISTVIEW && !w->ag_Private)
             w->ag_Private = (APTR)list_new();
+        else if (w->ag_Kind == AG_PASSWORD)
+        {
+            if (!(w->ag_Private = (APTR)pw_new(w)))
+                goto fail;
+        }
         else if (w->ag_Kind == AG_STRING)
         {
             ULONG max = w->ag_MaxChars ? w->ag_MaxChars : 128;
@@ -1101,8 +1266,16 @@ void AGUI_Close(struct AGUIApp *app)
             continue;
         if (w->ag_Kind == AG_LISTVIEW)
             list_free((struct AGList *)w->ag_Private);
-        else if (w->ag_Kind == AG_STRING)
+        else if (w->ag_Kind == AG_STRING || w->ag_Kind == AG_PASSWORD)
+        {
+            /* a password buffer is wiped, not just handed back */
+            if (w->ag_Kind == AG_PASSWORD)
+            {
+                struct AGPassword *p = (struct AGPassword *)w->ag_Private;
+                memset(pw_real(p), 0, p->pw_Max + 1);
+            }
             FreeVec(w->ag_Private);
+        }
         w->ag_Private = NULL;
     }
 
@@ -1126,6 +1299,13 @@ struct Window *AGUI_Window(struct AGUIApp *app)
     return app ? app->a_Window : NULL;
 }
 
+struct Gadget *AGUI_Gadget(struct AGUIApp *app, UWORD id)
+{
+    struct AGWidget *w = find_widget(app, id);
+
+    return w ? w->ag_Gadget : NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* event loop                                                          */
 /* ------------------------------------------------------------------ */
@@ -1134,6 +1314,132 @@ static void dispatch(struct AGUIApp *app, struct AGEvent *ev)
 {
     if (app->a_Spec->ag_Handler)
         app->a_Spec->ag_Handler(app, ev);
+}
+
+/* everything waiting on the window's port, then back to the caller */
+static void pump_messages(struct AGUIApp *app)
+{
+    struct IntuiMessage *imsg;
+    struct AGEvent ev;
+
+    while ((imsg = GT_GetIMsg(app->a_Window->UserPort)))
+    {
+        ULONG class = imsg->Class;
+        UWORD code  = imsg->Code;
+        UWORD qual  = imsg->Qualifier;
+        APTR  iaddr = imsg->IAddress;
+
+        GT_ReplyIMsg(imsg);
+
+        memset(&ev, 0, sizeof(ev));
+        ev.ev_Code      = code;
+        ev.ev_Qualifier = qual;
+
+        switch (class)
+        {
+        case IDCMP_CLOSEWINDOW:
+            ev.ev_Type = AGE_CLOSE;
+            dispatch(app, &ev);
+            break;
+
+        case IDCMP_REFRESHWINDOW:
+            GT_BeginRefresh(app->a_Window);
+            GT_EndRefresh(app->a_Window, TRUE);
+            break;
+
+        case IDCMP_NEWSIZE:
+            relayout(app);
+            break;
+
+        case IDCMP_VANILLAKEY:
+            ev.ev_Type = AGE_KEY;
+            dispatch(app, &ev);
+            break;
+
+        case IDCMP_MENUPICK:
+            {
+                UWORD mnum = code;
+                while (mnum != MENUNULL && !app->a_Done)
+                {
+                    struct MenuItem *item = ItemAddress(app->a_Menu, mnum);
+                    if (!item)
+                        break;
+                    ev.ev_Type = AGE_MENU;
+                    ev.ev_Code = (ULONG)GTMENUITEM_USERDATA(item);
+                    ev.ev_ID   = (UWORD)(ULONG)GTMENUITEM_USERDATA(item);
+                    dispatch(app, &ev);
+                    mnum = item->NextSelect;
+                }
+            }
+            break;
+
+        case IDCMP_GADGETUP:
+        case IDCMP_GADGETDOWN:
+            {
+                struct Gadget *g = (struct Gadget *)iaddr;
+                struct AGWidget *w = find_by_gadget(app, g);
+
+                if (w)
+                {
+                    ev.ev_ID = w->ag_ID;
+                    switch (w->ag_Kind)
+                    {
+                    case AG_BUTTON:
+                        if (class == IDCMP_GADGETUP)
+                        {
+                            ev.ev_Type = AGE_CLICK;
+                            dispatch(app, &ev);
+                        }
+                        break;
+                    case AG_CHECKBOX:
+                        w->ag_Value = (g->Flags & GFLG_SELECTED) ? 1 : 0;
+                        ev.ev_Type  = AGE_CHANGE;
+                        ev.ev_Value = w->ag_Value;
+                        if (class == IDCMP_GADGETUP)
+                            dispatch(app, &ev);
+                        break;
+                    case AG_PASSWORD:
+                        /* leaving the field covers the last character
+                         * the edit hook left legible */
+                        if (class == IDCMP_GADGETUP)
+                        {
+                            pw_hide(app, w);
+                            ev.ev_Type = AGE_CHANGE;
+                            dispatch(app, &ev);
+                        }
+                        break;
+                    case AG_STRING:
+                        if (class == IDCMP_GADGETUP)
+                        {
+                            ev.ev_Type = AGE_CHANGE;
+                            dispatch(app, &ev);
+                        }
+                        break;
+                    default:
+                        if (class == IDCMP_GADGETUP ||
+                            w->ag_Kind == AG_SLIDER)
+                        {
+                            w->ag_Value = (LONG)code;
+                            ev.ev_Type  = AGE_CHANGE;
+                            ev.ev_Value = (LONG)code;
+                            dispatch(app, &ev);
+                        }
+                        break;
+                    }
+                }
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
+}
+
+void AGUI_Poll(struct AGUIApp *app)
+{
+    if (app && app->a_Window)
+        pump_messages(app);
 }
 
 void AGUI_Run(struct AGUIApp *app)
@@ -1186,113 +1492,7 @@ void AGUI_Run(struct AGUIApp *app)
         }
 
         if (sigs & winsig)
-        {
-            struct IntuiMessage *imsg;
-
-            while ((imsg = GT_GetIMsg(app->a_Window->UserPort)))
-            {
-                ULONG class = imsg->Class;
-                UWORD code  = imsg->Code;
-                UWORD qual  = imsg->Qualifier;
-                APTR  iaddr = imsg->IAddress;
-
-                GT_ReplyIMsg(imsg);
-
-                memset(&ev, 0, sizeof(ev));
-                ev.ev_Code      = code;
-                ev.ev_Qualifier = qual;
-
-                switch (class)
-                {
-                case IDCMP_CLOSEWINDOW:
-                    ev.ev_Type = AGE_CLOSE;
-                    dispatch(app, &ev);
-                    break;
-
-                case IDCMP_REFRESHWINDOW:
-                    GT_BeginRefresh(app->a_Window);
-                    GT_EndRefresh(app->a_Window, TRUE);
-                    break;
-
-                case IDCMP_NEWSIZE:
-                    relayout(app);
-                    break;
-
-                case IDCMP_VANILLAKEY:
-                    ev.ev_Type = AGE_KEY;
-                    dispatch(app, &ev);
-                    break;
-
-                case IDCMP_MENUPICK:
-                    {
-                        UWORD mnum = code;
-                        while (mnum != MENUNULL && !app->a_Done)
-                        {
-                            struct MenuItem *item =
-                                ItemAddress(app->a_Menu, mnum);
-                            if (!item)
-                                break;
-                            ev.ev_Type = AGE_MENU;
-                            ev.ev_Code = (ULONG)GTMENUITEM_USERDATA(item);
-                            ev.ev_ID   = (UWORD)(ULONG)GTMENUITEM_USERDATA(item);
-                            dispatch(app, &ev);
-                            mnum = item->NextSelect;
-                        }
-                    }
-                    break;
-
-                case IDCMP_GADGETUP:
-                case IDCMP_GADGETDOWN:
-                    {
-                        struct Gadget *g = (struct Gadget *)iaddr;
-                        struct AGWidget *w = find_by_gadget(app, g);
-
-                        if (w)
-                        {
-                            ev.ev_ID = w->ag_ID;
-                            switch (w->ag_Kind)
-                            {
-                            case AG_BUTTON:
-                                if (class == IDCMP_GADGETUP)
-                                {
-                                    ev.ev_Type = AGE_CLICK;
-                                    dispatch(app, &ev);
-                                }
-                                break;
-                            case AG_CHECKBOX:
-                                w->ag_Value = (g->Flags & GFLG_SELECTED) ? 1 : 0;
-                                ev.ev_Type  = AGE_CHANGE;
-                                ev.ev_Value = w->ag_Value;
-                                if (class == IDCMP_GADGETUP)
-                                    dispatch(app, &ev);
-                                break;
-                            case AG_STRING:
-                                if (class == IDCMP_GADGETUP)
-                                {
-                                    ev.ev_Type = AGE_CHANGE;
-                                    dispatch(app, &ev);
-                                }
-                                break;
-                            default:
-                                if (class == IDCMP_GADGETUP ||
-                                    w->ag_Kind == AG_SLIDER)
-                                {
-                                    w->ag_Value = (LONG)code;
-                                    ev.ev_Type  = AGE_CHANGE;
-                                    ev.ev_Value = (LONG)code;
-                                    dispatch(app, &ev);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    break;
-
-                default:
-                    break;
-                }
-            }
-        }
+            pump_messages(app);
     }
 }
 
@@ -1304,9 +1504,15 @@ STRPTR AGUI_GetString(struct AGUIApp *app, UWORD id)
 {
     struct AGWidget *w = find_widget(app, id);
 
-    if (w && w->ag_Gadget && w->ag_Gadget->SpecialInfo)
+    if (!w)
+        return (STRPTR)"";
+    /* a password gadget only ever holds asterisks; the real text is ours */
+    if (w->ag_Kind == AG_PASSWORD)
+        return w->ag_Private ? (STRPTR)pw_real((struct AGPassword *)w->ag_Private)
+                             : (STRPTR)"";
+    if (w->ag_Gadget && w->ag_Gadget->SpecialInfo)
         return ((struct StringInfo *)w->ag_Gadget->SpecialInfo)->Buffer;
-    if (w && w->ag_Private && w->ag_Kind == AG_STRING)
+    if (w->ag_Private && w->ag_Kind == AG_STRING)
         return (STRPTR)w->ag_Private;
     return (STRPTR)"";
 }
@@ -1314,6 +1520,16 @@ STRPTR AGUI_GetString(struct AGUIApp *app, UWORD id)
 void AGUI_SetString(struct AGUIApp *app, UWORD id, CONST_STRPTR s)
 {
     struct AGWidget *w = find_widget(app, id);
+
+    if (w && w->ag_Kind == AG_PASSWORD && w->ag_Private)
+    {
+        struct AGPassword *p = (struct AGPassword *)w->ag_Private;
+
+        memset(pw_real(p), 0, p->pw_Max + 1);
+        strncpy(pw_real(p), s ? (char *)s : "", p->pw_Max);
+        pw_hide(app, w);
+        return;
+    }
 
     if (!w || w->ag_Kind != AG_STRING)
         return;
@@ -1424,6 +1640,38 @@ void AGUI_Disable(struct AGUIApp *app, UWORD id, BOOL disabled)
     if (w && w->ag_Gadget)
         GT_SetGadgetAttrs(w->ag_Gadget, app->a_Window, NULL,
                           GA_Disabled, (ULONG)disabled, TAG_END);
+}
+
+/*
+ * GadTools draws a button's title from the IntuiText it hung on the
+ * gadget, and offers no tag to change it, so the text pointer is swapped
+ * and the gadget redrawn. The caller keeps the string alive, and the
+ * gadget box does not change size -- see ag_MaxChars.
+ */
+void AGUI_SetLabel(struct AGUIApp *app, UWORD id, CONST_STRPTR s)
+{
+    struct AGWidget *w = find_widget(app, id);
+    struct IntuiText *it;
+
+    if (!w || !s)
+        return;
+    w->ag_Label = (STRPTR)s;
+    if (!w->ag_Gadget || w->ag_Kind != AG_BUTTON)
+        return;
+
+    it = (struct IntuiText *)w->ag_Gadget->GadgetText;
+    if (!it)
+        return;
+
+    it->IText = (STRPTR)s;
+    /* centre it again: GadTools placed the old text by hand */
+    it->LeftEdge = (WORD)((w->ag_Gadget->Width -
+                           text_width(app, s)) / 2);
+    it->TopEdge  = (WORD)((w->ag_Gadget->Height - app->a_FontH) / 2);
+
+    /* a button fills its own interior, so a shorter title leaves nothing
+     * of the old one behind */
+    RefreshGList(w->ag_Gadget, app->a_Window, NULL, 1);
 }
 
 /* ------------------------------------------------------------------ */

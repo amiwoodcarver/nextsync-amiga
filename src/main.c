@@ -107,6 +107,12 @@ static int cmd_sync(nsconf *conf)
                    (unsigned long)st.unchanged);
             if (st.failed)
                 rc = 5;
+            if (st.aborted)
+            {
+                printf("  stopped. Files already transferred are kept.\n");
+                rc = 5;
+                break;
+            }
         }
         else
         {
@@ -231,6 +237,8 @@ int main(int argc, char **argv)
             rc = nextsync_gui_ex(&conf, CONFFILE, 1);
         else if (cmd && !ns_stricmp(cmd, "NESTTEST"))
             rc = nextsync_gui_ex(&conf, CONFFILE, 3);
+        else if (cmd && !ns_stricmp(cmd, "ABORTTEST"))
+            rc = nextsync_gui_ex(&conf, CONFFILE, 4);
         else
             rc = nextsync_gui(&conf, CONFFILE);
     }

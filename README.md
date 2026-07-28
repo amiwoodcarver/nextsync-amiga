@@ -6,7 +6,7 @@ verification.
 
 ![NextSync running on Workbench](docs/nextsync-gui.png)
 
-Around 45 KB. Workbench GUI and a scriptable CLI in one binary. Targets the
+Around 49 KB. Workbench GUI and a scriptable CLI in one binary. Targets the
 A1200 and A4000; tested on 68020 without an FPU and on 68040.
 
 ---
@@ -21,6 +21,12 @@ A1200 and A4000; tested on 68020 without an FPU and on 68040.
 - **Browse** picks the local drawer with the standard file requester.
 - **First run opens Preferences by itself** when there is no
   configuration yet.
+- **The password is not on show.** The field holds asterisks; the
+  character you have just typed stays legible until the next one, and is
+  covered as soon as you leave the field.
+- **A sync can be stopped.** The Sync now button becomes Stop sync while
+  one is running — so can ESC, or the close gadget. It stops after the
+  file in flight, and everything already transferred is kept.
 - **Directory trees are removed properly.** Deleting a folder on one side
   now clears the whole tree on the other in a single run, deepest drawer
   first, instead of leaving the empty drawers behind.
@@ -45,7 +51,11 @@ A1200 and A4000; tested on 68020 without an FPU and on 68040.
   at a folder that already has content never deletes anything.
 - **Streaming transfers.** 16 KB blocks; files never have to fit in RAM.
   Downloads land in `<name>.nspart` and are renamed into place only when
-  complete, so an interrupted transfer cannot leave a corrupt file.
+  complete, so an interrupted transfer cannot leave a corrupt file. A
+  transfer that stops early is a failure, not a short file: the byte
+  count is checked against the length the server declared, and a
+  `.nspart` still lying about from a crash is thrown away rather than
+  mistaken for something of yours and uploaded.
 - **TLS 1.3** via AmiSSL v5, verified against the AmiSSL CA store.
 - Local modification times are preserved on the server (`X-OC-MTime`).
 
@@ -80,8 +90,12 @@ Project → Preferences, or the dialog that opens by itself on a first run:
 5. **Save.**
 
 Use a Nextcloud **app password** (Settings → Security on the server) rather
-than your account password: the file this writes is plain text, and an app
-password can be revoked on its own.
+than your account password. The dialog does not show the password back to
+you, but **the file it writes is plain text** — AmigaOS has nowhere to
+keep a secret, and the password has to be presented to the server on every
+request, so it cannot be one-way hashed either. An app password limits
+what a reader of that file gets, and can be revoked on its own without
+touching your account.
 
 The folder list is one level deep — the folders in your file root. That is
 what you pick; syncing then follows each one all the way down.
@@ -126,7 +140,11 @@ NextSync PREFS      open Preferences on its own
 Add `SNAPSHOT` to any of those to save a screen dump to `out/` once the
 window has drawn itself, and exit.
 
-During a CLI sync, CTRL-C stops cleanly after the current file finishes.
+**Stopping a sync.** In the GUI, the Sync now button reads Stop sync while
+one is running; ESC and the close gadget do the same thing. From the CLI,
+CTRL-C. All of them stop after the file being transferred finishes, so
+nothing is left half written, and what has already been transferred stays
+— the next run picks up from there.
 
 ## How the sync decides what to do
 
@@ -267,6 +285,7 @@ is involved.
 | `src/nsconf.c` | the configuration file |
 | `src/gui.c` | Workbench interface |
 | `src/nsprefs.c` | the Preferences dialog |
+| `src/nstest.c` | synthetic keystrokes, so the self tests can reach paths only a keyboard can |
 | `agui/` | the Intuition/GadTools application framework this is built on, bundled from [amiga-devkit](https://github.com/axelsharper/amiga-devkit) |
 | `tools/mkicon.py` | draws the Workbench icon, geometry rather than a blob |
 | `tools/mockdav.py` | the offline stand-in for a Nextcloud server |
@@ -276,7 +295,7 @@ host directly.
 
 ## Platform notes
 
-Four AmigaOS specifics cost real debugging time here. They are written up in
+Six AmigaOS specifics cost real debugging time here. They are written up in
 **[docs/platform-notes.md](docs/platform-notes.md)** — worth reading before
 touching the AmiSSL or linking setup, and possibly useful for anyone else
 writing a networked Amiga program in 2026.

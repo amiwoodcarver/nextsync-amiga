@@ -18,6 +18,7 @@
 #include "nssync.h"
 #include "nsconf.h"
 #include "nsprefs.h"
+#include "nstest.h"
 
 #define ID_SERVER   1
 #define ID_PAIRS    2
@@ -31,11 +32,15 @@
 #define MENU_PREFS  103
 #define MENU_QUIT   104
 
+#define LABEL_SYNC   "Sync now"
+#define LABEL_ABORT  "Stop sync"
+
 struct gui_state
 {
     nsconf     *conf;
     const char *conffile;
     BOOL        busy;
+    BOOL        abort;     /* Stop sync was pressed                    */
     int         guitest;   /* 0 off, 1 sync pending, 2 snapshot pending */
 };
 
@@ -45,7 +50,10 @@ static struct AGWidget widgets[] =
     { AG_LISTVIEW, ID_PAIRS,  "Folders:", 0,            NULL, 0, 4 },
     { AG_TEXT,     ID_STATUS, "Status:",  0, NULL, 0, 0, 0, "idle" },
     { AG_LISTVIEW, ID_LOG,    "Log:",     AGF_GROW },
-    { AG_BUTTON,   ID_SYNC,   "Sync now", 0 },
+    /* ag_MaxChars reserves room so the title can change to LABEL_ABORT
+     * without the button having to be re-laid-out under the user */
+    { AG_BUTTON,   ID_SYNC,   LABEL_SYNC, 0, NULL, 0, 0, 0, NULL,
+      sizeof(LABEL_ABORT) },
     { AG_BUTTON,   ID_QUIT,   "Quit",     AGF_SAMEROW },
     { AG_END }
 };
@@ -74,14 +82,62 @@ static void gui_log(void *user, const char *fmt, ...)
     AGUI_AddItem(app, ID_LOG, (CONST_STRPTR)buf);
 }
 
+/*
+ * Called between files. The sync runs inside the event handler, so the
+ * window is not reading its own messages -- pumping them here is what
+ * keeps it redrawing and what lets Stop sync be clicked at all.
+ * Returning FALSE stops the run after the current file.
+ */
 static BOOL gui_file(void *user, const char *action, const char *path,
                      ULONG idx, ULONG total)
 {
     struct AGUIApp *app = (struct AGUIApp *)user;
+    struct gui_state *st = (struct gui_state *)AGUI_UserData(app);
 
     AGUI_SetTextF(app, ID_STATUS, "%s %s (%lu/%lu)",
                   action, path, (unsigned long)idx, (unsigned long)total);
-    return TRUE;
+
+    /* ABORTTEST: click Stop sync for real, from inside the sync, so the
+     * event has to make the whole trip out to Intuition and back into a
+     * handler that is already running */
+    /*
+     * ABORTTEST: press ESC for real, from inside the sync, so the event
+     * has to travel out to Intuition and back into a handler that is
+     * already running. Clicking Stop sync takes the same road from
+     * AGUI_Poll() onwards; a synthetic mouse click is the one thing that
+     * does not survive the emulator's input layer, so the button itself
+     * is checked by hand.
+     */
+    if (st->guitest == 4 && idx == 2)
+    {
+        printf("abort: pressing ESC during file %lu\n", (unsigned long)idx);
+        fflush(stdout);
+        nstest_key(0x45);
+    }
+
+    AGUI_Poll(app);
+
+    if (st->guitest == 4 && idx == 2)
+    {
+        printf("abort: after poll, abort=%ld\n", (long)st->abort);
+        fflush(stdout);
+    }
+    return (BOOL)!st->abort;
+}
+
+/* the same, during one long transfer: keeps the window alive and lets a
+ * single enormous file be given up on */
+static BOOL gui_progress(void *user, const char *phase, ULONG done,
+                         ULONG total)
+{
+    struct AGUIApp *app = (struct AGUIApp *)user;
+    struct gui_state *st = (struct gui_state *)AGUI_UserData(app);
+
+    (void)phase;
+    (void)done;
+    (void)total;
+    AGUI_Poll(app);
+    return (BOOL)!st->abort;
 }
 
 /* redraw everything that comes out of the configuration */
@@ -129,8 +185,9 @@ static void run_sync(struct AGUIApp *app)
 
     if (st->busy)
         return;
-    st->busy = TRUE;
-    AGUI_Disable(app, ID_SYNC, TRUE);
+    st->busy  = TRUE;
+    st->abort = FALSE;
+    AGUI_SetLabel(app, ID_SYNC, (CONST_STRPTR)LABEL_ABORT);
 
     AGUI_SetText(app, ID_STATUS, "connecting...");
     h = nshttp_open(conf->server, conf->port, conf->port == 443,
@@ -143,8 +200,9 @@ static void run_sync(struct AGUIApp *app)
     else
     {
         nsdav_init(&dav, h, conf->user);
+        nshttp_set_progress(h, gui_progress, app);
 
-        for (i = 0; i < conf->npairs; i++)
+        for (i = 0; i < conf->npairs && !st->abort; i++)
         {
             nssync_stats stats;
 
@@ -163,12 +221,17 @@ static void run_sync(struct AGUIApp *app)
             else
                 gui_log(app, "sync failed");
         }
+        nshttp_set_progress(h, NULL, NULL);
         nshttp_close(h);
-        AGUI_SetText(app, ID_STATUS, "idle");
+        AGUI_SetText(app, ID_STATUS, st->abort ? "stopped" : "idle");
     }
 
-    AGUI_Disable(app, ID_SYNC, FALSE);
-    st->busy = FALSE;
+    if (st->abort)
+        gui_log(app, "stopped. Files already transferred are kept.");
+
+    AGUI_SetLabel(app, ID_SYNC, (CONST_STRPTR)LABEL_SYNC);
+    st->busy  = FALSE;
+    st->abort = FALSE;
 }
 
 static void handler(struct AGUIApp *app, struct AGEvent *ev)
@@ -186,11 +249,20 @@ static void handler(struct AGUIApp *app, struct AGEvent *ev)
         break;
 
     case AGE_TICK:
-        /* GUITEST: one automated sync, one snapshot, then quit */
-        if (st->guitest == 1)
+        /* GUITEST: one automated sync, one snapshot, then quit.
+         * ABORTTEST (4) is the same but stops itself part way. */
+        if (st->guitest == 1 || st->guitest == 4)
         {
-            st->guitest = 2;
+            int mode = st->guitest;
             run_sync(app);
+            st->guitest = (mode == 4) ? 5 : 2;
+        }
+        else if (st->guitest == 5)
+        {
+            printf("abort: sync returned, window still alive\n");
+            fflush(stdout);
+            AGUI_Snapshot(app, "out/nextsync.ags");
+            AGUI_Quit(app);
         }
         /* NESTTEST: open Preferences from inside this window's own event
          * loop, which is the case the modal dialog has to survive */
@@ -211,14 +283,40 @@ static void handler(struct AGUIApp *app, struct AGEvent *ev)
         }
         break;
 
+    case AGE_KEY:
+        /* ESC stops a running sync, the way ESC cancels anything else */
+        if (ev->ev_Code == 0x1B && st->busy)
+        {
+            st->abort = TRUE;
+            AGUI_SetText(app, ID_STATUS, "stopping after this file...");
+        }
+        break;
+
     case AGE_CLOSE:
-        if (!st->busy)
+        /* mid-sync the close gadget stops the sync; close again to leave */
+        if (st->busy)
+        {
+            st->abort = TRUE;
+            AGUI_SetText(app, ID_STATUS, "stopping after this file...");
+        }
+        else
             AGUI_Quit(app);
         break;
 
     case AGE_CLICK:
         if (ev->ev_ID == ID_SYNC)
-            run_sync(app);
+        {
+            /* the same button: start when idle, stop when running. This
+             * arrives from AGUI_Poll() inside the sync, so the handler is
+             * re-entered here -- set the flag and unwind, do not sync */
+            if (st->busy)
+            {
+                st->abort = TRUE;
+                AGUI_SetText(app, ID_STATUS, "stopping after this file...");
+            }
+            else
+                run_sync(app);
+        }
         else if (ev->ev_ID == ID_QUIT && !st->busy)
             AGUI_Quit(app);
         break;

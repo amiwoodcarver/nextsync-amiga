@@ -1,6 +1,6 @@
 # Platform notes
 
-Four AmigaOS specifics that each cost a real debugging session while
+Six AmigaOS specifics that each cost a real debugging session while
 building NextSync. Written down because none of them announce themselves
 and all of them look like something else at first.
 
@@ -84,6 +84,62 @@ layout, JIT, and AmiSSL version all fail to help.
 **Fix.** Use [Amiberry](https://amiberry.com/), whose core is current.
 `tools/run-emu.sh` uses it. FS-UAE remains fine for non-networked Amiga
 work.
+
+## 5. There is no password gadget, only an edit hook
+
+**Symptom.** You want a string gadget that shows asterisks. GadTools has
+no tag for it, Intuition's string gadget has no secret mode, and a string
+gadget draws whatever is in its buffer — so anything you keep there for
+safe keeping is exactly what the user sees.
+
+**Cause.** By design. The buffer *is* the display.
+
+**Fix.** Keep two buffers and join them with a string edit hook
+(`GTST_EditHook`, `struct SGWork`, `intuition/sghooks.h`). Intuition
+applies each keystroke to a work buffer and then calls the hook; the hook
+works out what changed, makes the same change to the real text it holds
+privately, and writes a row of asterisks back to be displayed.
+
+Working out what changed is less work than it sounds, because the length
+and the cursor position are enough:
+
+- longer by n: n characters were inserted ending at the cursor, so they
+  sit at `BufferPos - n`
+- shorter by n: n characters were removed *at* the cursor — backspace
+  leaves the cursor where the deleted character was and delete never
+  moves it, so one case covers both, and clear and delete-to-end-of-line
+  fall out of it as well
+
+Set `SGA_USE | SGA_REDISPLAY` in `SGWork.Actions` and return non-zero, or
+Intuition keeps its own version of the buffer. Return 0 for any command
+other than `SGH_KEY`.
+
+The hook needs amiga.lib's `HookEntry` in `h_Entry` with the C function in
+`h_SubEntry`: Intuition calls hooks with their arguments in registers.
+
+In agui this is `AG_PASSWORD`. Leaving the character just typed legible
+until the next keystroke costs nothing extra — the hook is rewriting the
+buffer on every key anyway — and it beats a timer poking at a gadget
+somebody is in the middle of editing.
+
+## 6. Synthetic mouse clicks do not survive an emulator
+
+**Symptom.** Raw key events written to `input.device` with
+`IND_WRITEEVENT` drive a real Amiga program perfectly. The same approach
+for a mouse click — `IECLASS_POINTERPOS` or `IECLASS_NEWPOINTERPOS` with
+`IESUBCLASS_PIXEL` to place the pointer, then `IECLASS_RAWMOUSE` for the
+button — never lands on the gadget. Chaining the events through
+`ie_NextEvent` so nothing can be interleaved does not help either, and
+neither does turning the emulator's pointer integration off.
+
+**Cause.** Not established. Keyboard injection works, so the mechanism is
+sound; the pointer position an emulator maintains for the host mouse
+appears to win over the one an injected event asks for.
+
+**Fix.** None found. For automated tests, reach the same handler through
+the keyboard — which is a good idea regardless, since a keyboard route
+into an action is worth having for its own sake. Buttons stay a
+by-hand check.
 
 ---
 
